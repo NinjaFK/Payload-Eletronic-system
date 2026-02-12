@@ -48,7 +48,7 @@ void setup()
 
   Wire.begin(); // defaults to SDA=18, SCL=19 on Teensy 4.1
 
-  if (!adxl.begin_I2C())
+  if (!imu.begin())
   { // use the I2C interface over STEMMA QT
     Serial.println("ADXL375 not detected!");
     while (1)
