@@ -38,8 +38,11 @@ void setup()
     ;
 
   // SD card
-  if(!sd.begin(SD_CONFIG)) {
-      Serial.println("SD init failed"); while(1);
+  if (!sd.begin(SD_CONFIG))
+  {
+    Serial.println("SD init failed");
+    while (1)
+      ;
   }
   logFile = sd.open("log000.txt", FILE_WRITE);
 
