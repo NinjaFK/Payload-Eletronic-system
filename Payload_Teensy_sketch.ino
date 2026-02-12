@@ -5,7 +5,7 @@
 
 // Sensors
 #include <Adafruit_Sensor.h>
-#include <Adafruit_LSM6DSO32.h>
+// #include <Adafruit_LSM6DSO32.h>
 #include <Adafruit_ADXL375.h>
 #include <Adafruit_BMP3XX.h>
 #include <Adafruit_MPR121.h>
@@ -13,11 +13,13 @@
 // RF
 #include <LoRa.h>
 
+#define ADXL375_CS 10
+
 // Sensor objects
-Adafruit_LSM6DSO32 imu;
-Adafruit_ADXL375  adxl = Adafruit_ADXL375();
-Adafruit_BMP3XX   bmp;
-Adafruit_MPR121   cap = Adafruit_MPR121();
+// Adafruit_LSM6DSO32 imu;
+Adafruit_ADXL375 imu = Adafruit_ADXL375(ADXL375_CS);
+Adafruit_BMP3XX bmp;
+Adafruit_MPR121 cap = Adafruit_MPR121();
 
 // SD
 
