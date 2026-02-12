@@ -27,12 +27,15 @@ SdFs sd;
 FsFile logFile;
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
 
-void setup() {
+void setup()
+{
+  delay(5000);
   // Serial (output)
   Serial.begin(115200);
 
   // Waits for serial to connect
-  while (!Serial);
+  while (!Serial && millis() < 3000)
+    ;
 
   // SD card
   if(!sd.begin(SD_CONFIG)) {
