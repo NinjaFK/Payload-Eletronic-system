@@ -46,11 +46,20 @@ void setup()
   }
   logFile = sd.open("log000.txt", FILE_WRITE);
 
+  Wire.begin(); // defaults to SDA=18, SCL=19 on Teensy 4.1
 
+  if (!adxl.begin_I2C())
+  { // use the I2C interface over STEMMA QT
+    Serial.println("ADXL375 not detected!");
+    while (1)
+      ;
+  }
 
+  Serial.println("Normal");
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
-
+void loop()
+{
+  sensors_event_t event;
+  imu.getEvent(&event);
 }
