@@ -15,6 +15,8 @@
 
 #define ADXL375_CS 10
 
+float x, y, z;
+
 // Sensor objects
 Adafruit_ADXL375 accel = Adafruit_ADXL375(ADXL375_CS);
 Adafruit_BMP3XX bmp;
@@ -141,7 +143,7 @@ void setup()
   if (!IMU.begin())
   { // use the I2C interface over STEMMA QT
     Serial.println("LSM6DSO32 not detected!");
-    while (1)
+    while (0)
       ;
   }
   Serial.println("LSM6DSO32 detected!");
@@ -157,6 +159,10 @@ void setup()
 void loop()
 {
   sensors_event_t event;
+
+  // Acell printing
+  // ####################
+
   // accel.getEvent(&event);
 
   // Serial.print("X: ");
@@ -169,5 +175,24 @@ void loop()
   // Serial.print(event.acceleration.z);
   // Serial.print("  ");
   // Serial.println("m/s^2 ");
+
+  // ####################
+
+  // LSM6DSO32
+  // ####################
+
+  if (IMU.accelerationAvailable())
+  {
+    IMU.readAcceleration(x, y, z);
+
+    Serial.print(x);
+    Serial.print('\t');
+    Serial.print(y);
+    Serial.print('\t');
+    Serial.println(z);
+  }
+
+  // ####################
+
   delay(500);
 }
