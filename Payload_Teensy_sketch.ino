@@ -112,6 +112,22 @@ void setup()
   Serial.println("ADXL375 Accelerometer Test");
   Serial.println("");
 
+  /*
+  ADXL375 Accelerometer Test
+
+  Normal
+  ------------------------------------
+  Sensor:       ADXL375
+  Type:         Acceleration (m/s2)
+  Driver Ver:   1
+  Unique ID:    10
+  Min Value:    -1961.33
+  Max Value:    1961.33
+  Resolution:   0.48
+  ------------------------------------
+
+  Data Rate:    100  Hz
+  */
   if (!imu.begin())
   { // use the I2C interface over STEMMA QT
     Serial.println("ADXL375 not detected!");
@@ -119,11 +135,9 @@ void setup()
       ;
   }
 
-  Serial.println("Normal");
-  imu.printSensorDetails();
-
-  displayDataRate();
-  Serial.println("");
+  // imu.printSensorDetails();
+  // displayDataRate();
+  // Serial.println("");
 
   if (!cap.begin())
   {
