@@ -16,8 +16,7 @@
 #define ADXL375_CS 10
 
 // Sensor objects
-// Adafruit_LSM6DSO32 imu;
-Adafruit_ADXL375 imu = Adafruit_ADXL375(ADXL375_CS);
+Adafruit_ADXL375 accel = Adafruit_ADXL375(ADXL375_CS);
 Adafruit_BMP3XX bmp;
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
@@ -31,7 +30,7 @@ void displayDataRate(void)
 {
   Serial.print("Data Rate:    ");
 
-  switch (imu.getDataRate())
+  switch (accel.getDataRate())
   {
   case ADXL343_DATARATE_3200_HZ:
     Serial.print("3200 ");
@@ -127,14 +126,14 @@ void setup()
 
   Data Rate:    100  Hz
   */
-  if (!imu.begin())
+  if (!accel.begin())
   { // use the I2C interface over STEMMA QT
     Serial.println("ADXL375 not detected!");
-    while (1)
+    while (0)
       ;
   }
 
-  // imu.printSensorDetails();
+  // accel.printSensorDetails();
   // displayDataRate();
   // Serial.println("");
 
@@ -149,7 +148,7 @@ void setup()
 void loop()
 {
   sensors_event_t event;
-  imu.getEvent(&event);
+  // accel.getEvent(&event);
 
   Serial.print("X: ");
   Serial.print(event.acceleration.x);
