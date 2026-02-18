@@ -90,7 +90,6 @@ void displayDataRate(void)
 
 void setup()
 {
-  delay(5000);
   // Serial (output)
   Serial.begin(115200);
 
@@ -142,7 +141,7 @@ void setup()
   if (!cap.begin())
   {
     Serial.println("MPR121 not detected!");
-    while (1)
+    while (0)
       ;
   }
 }
