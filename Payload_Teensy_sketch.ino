@@ -5,7 +5,7 @@
 
 // Sensors
 #include <Adafruit_Sensor.h>
-// #include <Adafruit_LSM6DSO32.h>
+#include <Arduino_LSM6DSOX.h>
 #include <Adafruit_ADXL375.h>
 #include <Adafruit_BMP3XX.h>
 #include <Adafruit_MPR121.h>
@@ -136,6 +136,15 @@ void setup()
   // accel.printSensorDetails();
   // displayDataRate();
   // Serial.println("");
+
+  // Accel LSM6DSO32
+  if (!IMU.begin())
+  { // use the I2C interface over STEMMA QT
+    Serial.println("LSM6DSO32 not detected!");
+    while (1)
+      ;
+  }
+  Serial.println("LSM6DSO32 detected!");
 
   if (!cap.begin())
   {
