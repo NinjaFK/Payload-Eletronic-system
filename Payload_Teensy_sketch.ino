@@ -14,6 +14,7 @@
 #include <LoRa.h>
 
 #define ADXL375_CS 10
+#define SD_CONFIG SdioConfig(FIFO_SDIO)
 
 float x, y, z;
 
@@ -23,7 +24,7 @@ Adafruit_BMP3XX bmp;
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
 // SD
-
+#include "SdFat.h"
 SdFs sd;
 FsFile logFile;
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
