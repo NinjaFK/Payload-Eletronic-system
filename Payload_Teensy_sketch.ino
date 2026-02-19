@@ -134,6 +134,10 @@ void setup()
     while (0)
       ;
   }
+  else
+  {
+    Serial.println("ADXL375 detected!");
+  }
 
   // accel.printSensorDetails();
   // displayDataRate();
@@ -146,13 +150,20 @@ void setup()
     while (0)
       ;
   }
-  Serial.println("LSM6DSO32 detected!");
+  else
+  {
+    Serial.println("LSM6DSO32 detected!");
+  }
 
   if (!cap.begin())
   {
     Serial.println("MPR121 not detected!");
     while (0)
       ;
+  }
+  else
+  {
+    Serial.println("MPR121 detected!");
   }
 }
 
