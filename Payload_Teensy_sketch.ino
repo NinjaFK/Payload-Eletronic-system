@@ -109,8 +109,8 @@ void setup()
 
   Wire.begin(); // defaults to SDA=18, SCL=19 on Teensy 4.1
 
-  Serial.println("ADXL375 Accelerometer Test");
-  Serial.println("");
+  // Serial.println("ADXL375 Accelerometer Test");
+  // Serial.println("");
 
   /*
   ADXL375 Accelerometer Test
