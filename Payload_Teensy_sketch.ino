@@ -192,16 +192,16 @@ void loop()
   // LSM6DSO32
   // ####################
 
-  if (IMU.accelerationAvailable())
-  {
-    IMU.readAcceleration(x, y, z);
+  // if (IMU.accelerationAvailable())
+  // {
+  //   IMU.readAcceleration(x, y, z);
 
-    Serial.print(x);
-    Serial.print('\t');
-    Serial.print(y);
-    Serial.print('\t');
-    Serial.println(z);
-  }
+  //   Serial.print(x);
+  //   Serial.print('\t');
+  //   Serial.print(y);
+  //   Serial.print('\t');
+  //   Serial.println(z);
+  // }
 
   // ####################
 
