@@ -28,6 +28,8 @@ Adafruit_MPR121 cap = Adafruit_MPR121();
 SdFs sd;
 FsFile logFile;
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
+unsigned long startTime;
+const unsigned long LOG_DURATION_MS = 5000;
 
 void displayDataRate(void)
 {
@@ -106,7 +108,35 @@ void setup()
     while (1)
       ;
   }
+
+  if (sd.exists("log000.txt"))
+  {
+    Serial.println("Deleting old log000.txt");
+    sd.remove("log000.txt");
+  }
+
+  FsFile f = sd.open("log000.txt", O_WRITE | O_CREAT | O_TRUNC);
+
+  if (!f)
+  {
+    Serial.println("Open/create failed");
+    while (1)
+      ;
+  }
+
+  f.close();
+
   logFile = sd.open("log000.txt", FILE_WRITE);
+
+  if (!logFile)
+  {
+    Serial.println("Could not open log file");
+    while (1)
+      ;
+    Serial.println("Could not open log file");
+  }
+  logFile.println("millis,ax,ay,az");
+  logFile.flush();
 
   Wire.begin(); // defaults to SDA=18, SCL=19 on Teensy 4.1
 
@@ -193,16 +223,37 @@ void loop()
   // LSM6DSO32
   // ####################
 
-  // if (IMU.accelerationAvailable())
-  // {
-  //   IMU.readAcceleration(x, y, z);
+  if (IMU.accelerationAvailable())
+  {
+    IMU.readAcceleration(x, y, z);
 
-  //   Serial.print(x);
-  //   Serial.print('\t');
-  //   Serial.print(y);
-  //   Serial.print('\t');
-  //   Serial.println(z);
-  // }
+    unsigned long t = millis();
+
+    Serial.print(t);
+    Serial.print(",");
+    Serial.print(x, 4);
+    Serial.print(",");
+    Serial.print(y, 4);
+    Serial.print(",");
+    Serial.println(z, 4);
+
+    logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
+
+    if (t % 1000 > 500)
+    {
+      Serial.println("Wrote to SD");
+      logFile.flush();
+    }
+
+    if (t - startTime > LOG_DURATION_MS)
+    {
+      logFile.flush();
+      logFile.close();
+      Serial.println("Logging complete — file closed.");
+      while (1)
+        ;
+    }
+  }
 
   // ####################
 
