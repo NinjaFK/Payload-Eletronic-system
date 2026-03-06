@@ -23,6 +23,9 @@ Adafruit_ADXL375 accel = Adafruit_ADXL375(ADXL375_CS);
 Adafruit_BMP3XX bmp;
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
+// BMP
+#define SEALEVELPRESSURE_HPA (1013.25)
+
 // SD
 #include "SdFat.h"
 SdFs sd;
@@ -196,6 +199,48 @@ void setup()
   {
     Serial.println("MPR121 detected!");
   }
+
+  /*ADDED CODE FOR BMP388
+  if (!bmp.begin_I2C())
+  {
+    Serial.println("BMP388 not detected!");
+    while (0);
+  }
+
+  // Set up oversampling and filter initialization
+    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
+    bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
+    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
+    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
+  /**/
+
+  /*NOTE: im not sure what oversampling or filter rate would
+  be best so below is a list of all the possible settings, although
+  i would assume higher oversampling and filtering would be better
+  as it would not have to run for long
+
+  BMP3_NO_OVERSAMPLING
+  BMP3_OVERSAMPLING_2X
+  BMP3_OVERSAMPLING_4X
+  BMP3_OVERSAMPLING_8X
+  BMP3_OVERSAMPLING_16X
+  BMP3_OVERSAMPLING_32X
+
+  BMP3_IIR_FILTER_DISABLE (no filtering)
+  BMP3_IIR_FILTER_COEFF_1
+  BMP3_IIR_FILTER_COEFF_3
+  BMP3_IIR_FILTER_COEFF_7
+  BMP3_IIR_FILTER_COEFF_15
+  BMP3_IIR_FILTER_COEFF_31
+  BMP3_IIR_FILTER_COEFF_63
+  BMP3_IIR_FILTER_COEFF_127
+
+  BMP3_ODR_200_HZ, BMP3_ODR_100_HZ, BMP3_ODR_50_HZ, BMP3_ODR_25_HZ,
+  BMP3_ODR_12_5_HZ, BMP3_ODR_6_25_HZ, BMP3_ODR_3_1_HZ, BMP3_ODR_1_5_HZ,
+  BMP3_ODR_0_78_HZ, BMP3_ODR_0_39_HZ,BMP3_ODR_0_2_HZ, BMP3_ODR_0_1_HZ,
+  BMP3_ODR_0_05_HZ, BMP3_ODR_0_02_HZ, BMP3_ODR_0_01_HZ, BMP3_ODR_0_006_HZ,
+  BMP3_ODR_0_003_HZ, or BMP3_ODR_0_001_HZ
+  */
 }
 
 void loop()
@@ -256,6 +301,25 @@ void loop()
   }
 
   // ####################
+
+  /*FURTHER ADDED CODE FOR BMP388
+  if (! bmp.performReading()) {
+    Serial.println("Failed to read MBP388");
+    return;
+  }
+  Serial.print("Temperature = ");
+  Serial.print(bmp.temperature);
+  Serial.println(" *C");
+
+  Serial.print("Pressure = ");
+  Serial.print(bmp.pressure / 100.0);
+  Serial.println(" hPa");
+
+  Serial.print("Approx. Altitude = ");
+  Serial.print(bmp.readAltitude(SEALEVELPRESSURE_HPA));
+  Serial.println(" m");
+
+  */
 
   delay(500);
 }
