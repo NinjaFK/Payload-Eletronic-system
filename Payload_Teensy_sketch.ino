@@ -32,7 +32,7 @@ SdFs sd;
 FsFile logFile;
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
 unsigned long startTime;
-const unsigned long LOG_DURATION_MS = 5000;
+const unsigned long LOG_DURATION_MS = 10000;
 
 void displayDataRate(void)
 {
@@ -246,11 +246,12 @@ void setup()
 void loop()
 {
   sensors_event_t event;
+  unsigned long t = millis();
 
   // Acell printing
   // ####################
 
-  // accel.getEvent(&event);
+  accel.getEvent(&event);
 
   // Serial.print("X: ");
   // Serial.print(event.acceleration.x);
@@ -262,43 +263,51 @@ void loop()
   // Serial.print(event.acceleration.z);
   // Serial.print("  ");
   // Serial.println("m/s^2 ");
+  Serial.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
+
+  logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
+
+  if (t % 1000 > 500)
+  {
+    Serial.println("Wrote to SD");
+    logFile.flush();
+  }
 
   // ####################
 
   // LSM6DSO32
   // ####################
 
-  if (IMU.accelerationAvailable())
+  // if (IMU.accelerationAvailable())
+  // {
+  //   IMU.readAcceleration(x, y, z);
+
+  //   Serial.print(t);
+  //   Serial.print(",");
+  //   Serial.print(x, 4);
+  //   Serial.print(",");
+  //   Serial.print(y, 4);
+  //   Serial.print(",");
+  //   Serial.println(z, 4);
+
+  //   logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
+
+  //   if (t % 1000 > 500)
+  //   {
+  //     Serial.println("Wrote to SD");
+  //     logFile.flush();
+  //   }
+  // }
+
+  if (t - startTime > LOG_DURATION_MS)
   {
-    IMU.readAcceleration(x, y, z);
-
-    unsigned long t = millis();
-
-    Serial.print(t);
-    Serial.print(",");
-    Serial.print(x, 4);
-    Serial.print(",");
-    Serial.print(y, 4);
-    Serial.print(",");
-    Serial.println(z, 4);
-
-    logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
-
-    if (t % 1000 > 500)
-    {
-      Serial.println("Wrote to SD");
-      logFile.flush();
-    }
-
-    if (t - startTime > LOG_DURATION_MS)
-    {
-      logFile.flush();
-      logFile.close();
-      Serial.println("Logging complete — file closed.");
-      while (1)
-        ;
-    }
+    logFile.flush();
+    logFile.close();
+    Serial.println("Logging complete — file closed.");
+    while (1)
+      ;
   }
+  // ####################
 
   // ####################
 
