@@ -243,29 +243,32 @@ void setup()
   */
 }
 
+// Adxl375 collecting
+void collectAdxlData()
+{
+  sensors_event_t event;  
+  
+    accel.getEvent(&event);
+  
+    // Serial.print("X: ");
+    // Serial.print(event.acceleration.x);
+    // Serial.print("  ");
+    // Serial.print("Y: ");
+    // Serial.print(event.acceleration.y);
+    // Serial.print("  ");
+    // Serial.print("Z: ");
+    // Serial.print(event.acceleration.z);
+    // Serial.print("  ");
+    // Serial.println("m/s^2 ");
+    Serial.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
+  
+    logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
+}
+
+
 void loop()
 {
-  sensors_event_t event;
   unsigned long t = millis();
-
-  // Acell printing
-  // ####################
-
-  accel.getEvent(&event);
-
-  // Serial.print("X: ");
-  // Serial.print(event.acceleration.x);
-  // Serial.print("  ");
-  // Serial.print("Y: ");
-  // Serial.print(event.acceleration.y);
-  // Serial.print("  ");
-  // Serial.print("Z: ");
-  // Serial.print(event.acceleration.z);
-  // Serial.print("  ");
-  // Serial.println("m/s^2 ");
-  Serial.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
-
-  logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
 
   if (t % 1000 > 500)
   {
@@ -273,6 +276,8 @@ void loop()
     logFile.flush();
   }
 
+  // ADXL375
+  collectAdxlData();
   // ####################
 
   // LSM6DSO32
