@@ -14,13 +14,15 @@
 #include <LoRa.h>
 
 #define ADXL375_CS 10
-
-float x, y, z;
+#define LSM6DSO32_ADDR_1 0x6A
+#define LSM6DSO32_ADDR_2 0x6B
 
 // Sensor objects
 Adafruit_ADXL375 accel = Adafruit_ADXL375(ADXL375_CS);
 Adafruit_BMP3XX bmp;
 Adafruit_MPR121 cap = Adafruit_MPR121();
+LSM6DSOXClass imu1(Wire, LSM6DSO32_ADDR_1);
+LSM6DSOXClass imu2(Wire, LSM6DSO32_ADDR_2);
 
 // BMP
 #define SEALEVELPRESSURE_HPA (1013.25)
@@ -36,9 +38,11 @@ unsigned long t;
 
 // Sensor fail flags
 bool adxlOk = false;
-bool imuOk = false;
+bool imu1Ok = false;
+bool imu2Ok = false;
 bool capOk = false;
 bool bmpOk = false;
+unsigned long lastFlushMs = 0;
 
 void displayDataRate(void) {
   Serial.print("Data Rate:    ");
@@ -137,7 +141,9 @@ void setup() {
       ;
     Serial.println("Could not open log file");
   }
-  logFile.println("millis,ax,ay,az");
+  logFile.println("ms,adxl_x,adxl_y,adxl_z,imu1_ax,imu1_ay,imu1_az,imu1_gx,"
+                  "imu1_gy,imu1_gz,imu2_ax,imu2_ay,imu2_az,imu2_gx,imu2_gy,"
+                  "imu2_gz,temp_c,press_hpa,alt_m,sensor_status");
   logFile.flush();
 
   Wire.begin(); // defaults to SDA=18, SCL=19 on Teensy 4.1
@@ -173,13 +179,20 @@ void setup() {
   // displayDataRate();
   // Serial.println("");
 
-  // Accel LSM6DSO32
-  if (!IMU.begin()) { // use the I2C interface over STEMMA QT
-    Serial.println("LSM6DSO32 not detected!");
-    imuOk = false;
+  if (!imu1.begin()) {
+    Serial.println("LSM6DSO32 #1 (0x6A) not detected!");
+    imu1Ok = false;
   } else {
-    Serial.println("LSM6DSO32 detected!");
-    imuOk = true;
+    Serial.println("LSM6DSO32 #1 detected at 0x6A");
+    imu1Ok = true;
+  }
+
+  if (!imu2.begin()) {
+    Serial.println("LSM6DSO32 #2 (0x6B) not detected!");
+    imu2Ok = false;
+  } else {
+    Serial.println("LSM6DSO32 #2 detected at 0x6B");
+    imu2Ok = true;
   }
 
   if (!cap.begin()) {
@@ -232,100 +245,75 @@ void setup() {
   BMP3_ODR_0_003_HZ, or BMP3_ODR_0_001_HZ
   */
   startTime = millis();
+  lastFlushMs = startTime;
 }
 
-// Adxl375 collecting
-void collectAdxlData() {
-  if (!adxlOk) {
-    return;
+void collectAndLogRow() {
+  float adxlX = NAN, adxlY = NAN, adxlZ = NAN;
+  float imu1Ax = NAN, imu1Ay = NAN, imu1Az = NAN;
+  float imu1Gx = NAN, imu1Gy = NAN, imu1Gz = NAN;
+  float imu2Ax = NAN, imu2Ay = NAN, imu2Az = NAN;
+  float imu2Gx = NAN, imu2Gy = NAN, imu2Gz = NAN;
+  float tempC = NAN, pressHpa = NAN, altM = NAN;
+  uint32_t sensorStatus = 0;
+
+  if (adxlOk) {
+    sensors_event_t event;
+    accel.getEvent(&event);
+    adxlX = event.acceleration.x;
+    adxlY = event.acceleration.y;
+    adxlZ = event.acceleration.z;
+    sensorStatus |= (1u << 0);
   }
 
-  sensors_event_t event;
-
-  accel.getEvent(&event);
-
-  // Serial.print("X: ");
-  // Serial.print(event.acceleration.x);
-  // Serial.print("  ");
-  // Serial.print("Y: ");
-  // Serial.print(event.acceleration.y);
-  // Serial.print("  ");
-  // Serial.print("Z: ");
-  // Serial.print(event.acceleration.z);
-  // Serial.print("  ");
-  // Serial.println("m/s^2 ");
-  Serial.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x,
-                event.acceleration.y, event.acceleration.z);
-
-  logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x,
-                 event.acceleration.y, event.acceleration.z);
-}
-
-void collectLsm6d() {
-  if (!imuOk) {
-    return;
+  if (imu1Ok) {
+    if (imu1.accelerationAvailable()) {
+      imu1.readAcceleration(imu1Ax, imu1Ay, imu1Az);
+    }
+    if (imu1.gyroscopeAvailable()) {
+      imu1.readGyroscope(imu1Gx, imu1Gy, imu1Gz);
+    }
+    sensorStatus |= (1u << 1);
   }
 
-  if (IMU.accelerationAvailable()) {
-    IMU.readAcceleration(x, y, z);
-
-    // Serial.print(t);
-    // Serial.print(",");
-    // Serial.print(x, 4);
-    // Serial.print(",");
-    // Serial.print(y, 4);
-    // Serial.print(",");
-    // Serial.println(z, 4);
-
-    logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
-  }
-}
-
-void collectBmp() {
-  if (!bmpOk) {
-    return;
+  if (imu2Ok) {
+    if (imu2.accelerationAvailable()) {
+      imu2.readAcceleration(imu2Ax, imu2Ay, imu2Az);
+    }
+    if (imu2.gyroscopeAvailable()) {
+      imu2.readGyroscope(imu2Gx, imu2Gy, imu2Gz);
+    }
+    sensorStatus |= (1u << 2);
   }
 
-  if (!bmp.performReading()) {
-    Serial.println("Failed to read MBP388");
-    return;
+  if (bmpOk && bmp.performReading()) {
+    tempC = bmp.temperature;
+    pressHpa = (bmp.pressure / 100.0);
+    altM = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+    sensorStatus |= (1u << 3);
   }
-  // Serial.print("Temperature = ");
-  // Serial.print(bmp.temperature);
-  // Serial.println(" *C");
 
-  // Serial.print("Pressure = ");
-  // Serial.print(bmp.pressure / 100.0);
-  // Serial.println(" hPa");
+  if (capOk) {
+    sensorStatus |= (1u << 4);
+  }
 
-  // Serial.print("Approx. Altitude = ");
-  // Serial.print(bmp.readAltitude(SEALEVELPRESSURE_HPA));
-  // Serial.println(" m");
-
-  logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, bmp.temperature,
-                 (bmp.pressure / 100.0),
-                 bmp.readAltitude(SEALEVELPRESSURE_HPA));
+  logFile.printf("%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%."
+                 "4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%lu\n",
+                 t, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az, imu1Gx, imu1Gy,
+                 imu1Gz, imu2Ax, imu2Ay, imu2Az, imu2Gx, imu2Gy, imu2Gz, tempC,
+                 pressHpa, altM, (unsigned long)sensorStatus);
 }
 
 void loop() {
   t = millis();
 
-  if (t % 1000 > 500) {
-    Serial.println("Wrote to SD");
+  collectAndLogRow();
+
+  if (t - lastFlushMs >= 1000) {
     logFile.flush();
+    lastFlushMs = t;
+    Serial.println("Wrote to SD");
   }
-
-  // ADXL375
-  collectAdxlData();
-  // ####################
-
-  // LSM6DSO32
-  collectLsm6d();
-  // ####################
-
-  // BMP
-  collectBmp();
-  // ####################
 
   if (t - startTime > LOG_DURATION_MS) {
     logFile.flush();
