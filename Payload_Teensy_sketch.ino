@@ -26,6 +26,9 @@
 // Power switch control pin (Teensy GPIO -> TPS1H200A IN)
 // Update this to the exact pin used on your PCB.
 #define SENSOR_PWR_EN_PIN 6
+#define VALVE_CTRL_PIN 5
+#define FLOW_SENSOR_PIN 4
+#define VALVE_ACTIVE_HIGH true
 
 // IMU I2C addresses
 #define LSM6DSO32_ADDR_1 0x6A
@@ -34,8 +37,11 @@
 // Logging timing
 const unsigned long LOG_INTERVAL_MS = 20; // ~50 Hz
 const unsigned long FLUSH_INTERVAL_MS = 1000;
+const unsigned long FLOW_UPDATE_MS = 1000;
 const unsigned long MAX_LOG_DURATION_MS = 120000; // auto-stop after START
 const bool AUTO_START_ON_BOOT = false;            // set true for bench tests
+// Calibrate this for your exact flow sensor model.
+const float FLOW_PULSES_PER_LITER = 450.0f;
 
 SdFs sd;
 FsFile logFile;
@@ -62,6 +68,15 @@ bool imu1Ok = false;
 bool imu2Ok = false;
 bool capOk = false;
 bool bmpOk = false;
+bool flowOk = false;
+bool valveOpen = false;
+
+volatile uint32_t flowPulseCount = 0;
+float flowHz = 0.0f;
+float flowLpm = 0.0f;
+unsigned long lastFlowUpdateMs = 0;
+
+void flowPulseISR() { flowPulseCount++; }
 
 bool createNextLogFile() {
   char filename[16];
@@ -76,7 +91,8 @@ bool createNextLogFile() {
 
       logFile.println("ms,adxl_x,adxl_y,adxl_z,imu1_ax,imu1_ay,imu1_az,imu1_gx,"
                       "imu1_gy,imu1_gz,imu2_ax,imu2_ay,imu2_az,imu2_gx,imu2_gy,"
-                      "imu2_gz,temp_c,press_hpa,alt_m,sensor_status");
+                      "imu2_gz,temp_c,press_hpa,alt_m,flow_hz,flow_lpm,valve,"
+                      "sensor_status");
       logFile.flush();
       Serial.print("Opened ");
       Serial.println(filename);
@@ -106,6 +122,35 @@ void powerSensorsOff() {
   digitalWrite(SENSOR_PWR_EN_PIN, LOW);
   systemPowered = false;
   Serial.println("Sensor rail OFF");
+}
+
+void setValve(bool open) {
+  valveOpen = open;
+  bool pinState = VALVE_ACTIVE_HIGH ? open : !open;
+  // High current load path is external (MOSFET/smart switch). This only drives
+  // the control input.
+  digitalWrite(VALVE_CTRL_PIN, pinState ? HIGH : LOW);
+}
+
+void updateFlowStats(unsigned long nowMs) {
+  if (nowMs - lastFlowUpdateMs < FLOW_UPDATE_MS) {
+    return;
+  }
+
+  uint32_t pulses = 0;
+  noInterrupts();
+  pulses = flowPulseCount;
+  flowPulseCount = 0;
+  interrupts();
+
+  unsigned long elapsedMs = nowMs - lastFlowUpdateMs;
+  if (elapsedMs == 0) {
+    return;
+  }
+
+  flowHz = (1000.0f * pulses) / (float)elapsedMs;
+  flowLpm = (flowHz * 60.0f) / FLOW_PULSES_PER_LITER;
+  lastFlowUpdateMs = nowMs;
 }
 
 void initSensors() {
@@ -165,6 +210,7 @@ void stopLogging(const char *reason) {
   }
 
   loggingActive = false;
+  setValve(false);
   powerSensorsOff();
 }
 
@@ -185,6 +231,12 @@ void startLogging() {
   startTime = millis();
   lastLogMs = startTime;
   lastFlushMs = startTime;
+  lastFlowUpdateMs = startTime;
+  flowHz = 0.0f;
+  flowLpm = 0.0f;
+  noInterrupts();
+  flowPulseCount = 0;
+  interrupts();
   loggingActive = true;
   Serial.println("Logging started");
 }
@@ -213,6 +265,10 @@ void handleLoRaCommands() {
     startLogging();
   } else if (cmd == "STOP") {
     stopLogging("RF STOP command");
+  } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
+    setValve(true);
+  } else if (cmd == "CLOSE" || cmd == "VALVE_OFF") {
+    setValve(false);
   } else if (cmd == "PING") {
     LoRa.beginPacket();
     LoRa.print("PONG");
@@ -240,6 +296,10 @@ void handleSerialCommands() {
     startLogging();
   } else if (cmd == "STOP") {
     stopLogging("Serial STOP command");
+  } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
+    setValve(true);
+  } else if (cmd == "CLOSE" || cmd == "VALVE_OFF") {
+    setValve(false);
   } else if (cmd == "PING") {
     Serial.println("PONG");
   }
@@ -293,12 +353,19 @@ void collectAndLogRow(unsigned long nowMs) {
   if (capOk) {
     sensorStatus |= (1u << 4);
   }
+  if (flowOk) {
+    sensorStatus |= (1u << 5);
+  }
+  if (valveOpen) {
+    sensorStatus |= (1u << 6);
+  }
 
   logFile.printf("%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%."
-                 "4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%lu\n",
+                 "4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
                  nowMs, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az, imu1Gx,
                  imu1Gy, imu1Gz, imu2Ax, imu2Ay, imu2Az, imu2Gx, imu2Gy, imu2Gz,
-                 tempC, pressHpa, altM, (unsigned long)sensorStatus);
+                 tempC, pressHpa, altM, flowHz, flowLpm, valveOpen ? 1u : 0u,
+                 (unsigned long)sensorStatus);
 }
 
 void setup() {
@@ -308,6 +375,12 @@ void setup() {
 
   pinMode(SENSOR_PWR_EN_PIN, OUTPUT);
   digitalWrite(SENSOR_PWR_EN_PIN, LOW); // keep sensors/load rail OFF at boot
+  pinMode(VALVE_CTRL_PIN, OUTPUT);
+  setValve(false);
+  pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseISR,
+                  FALLING);
+  flowOk = true;
 
   Wire.begin();
 
@@ -351,6 +424,7 @@ void loop() {
 
   if (nowMs - lastLogMs >= LOG_INTERVAL_MS) {
     lastLogMs = nowMs;
+    updateFlowStats(nowMs);
     collectAndLogRow(nowMs);
   }
 
