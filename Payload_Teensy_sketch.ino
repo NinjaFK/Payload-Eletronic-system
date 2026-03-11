@@ -14,7 +14,6 @@
 #include <LoRa.h>
 
 #define ADXL375_CS 10
-#define SD_CONFIG SdioConfig(FIFO_SDIO)
 
 float x, y, z;
 
