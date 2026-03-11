@@ -32,6 +32,7 @@ FsFile logFile;
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
 unsigned long startTime;
 const unsigned long LOG_DURATION_MS = 10000;
+unsigned long t;
 
 void displayDataRate(void) {
   Serial.print("Data Rate:    ");
@@ -224,6 +225,7 @@ void setup() {
   BMP3_ODR_0_05_HZ, BMP3_ODR_0_02_HZ, BMP3_ODR_0_01_HZ, BMP3_ODR_0_006_HZ,
   BMP3_ODR_0_003_HZ, or BMP3_ODR_0_001_HZ
   */
+  startTime = milis();
 }
 
 // Adxl375 collecting
@@ -284,7 +286,7 @@ void collectBmp() {
 }
 
 void loop() {
-  unsigned long t = millis();
+  t = millis();
 
   if (t % 1000 > 500) {
     Serial.println("Wrote to SD");
