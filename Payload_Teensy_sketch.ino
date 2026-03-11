@@ -184,19 +184,18 @@ void setup() {
     Serial.println("MPR121 detected!");
   }
 
-  /*ADDED CODE FOR BMP388
-  if (!bmp.begin_I2C())
-  {
+  // ADDED CODE FOR BMP388
+  if (!bmp.begin_I2C()) {
     Serial.println("BMP388 not detected!");
-    while (0);
+    while (0)
+      ;
   }
 
   // Set up oversampling and filter initialization
-    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
-    bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
-    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
-    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
-  /**/
+  bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
+  bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
+  bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
+  bmp.setOutputDataRate(BMP3_ODR_50_HZ);
 
   /*NOTE: im not sure what oversampling or filter rate would
   be best so below is a list of all the possible settings, although
@@ -255,13 +254,13 @@ void collectLsm6d() {
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(x, y, z);
 
-    Serial.print(t);
-    Serial.print(",");
-    Serial.print(x, 4);
-    Serial.print(",");
-    Serial.print(y, 4);
-    Serial.print(",");
-    Serial.println(z, 4);
+    // Serial.print(t);
+    // Serial.print(",");
+    // Serial.print(x, 4);
+    // Serial.print(",");
+    // Serial.print(y, 4);
+    // Serial.print(",");
+    // Serial.println(z, 4);
 
     logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
   }
@@ -272,17 +271,21 @@ void collectBmp() {
     Serial.println("Failed to read MBP388");
     return;
   }
-  Serial.print("Temperature = ");
-  Serial.print(bmp.temperature);
-  Serial.println(" *C");
+  // Serial.print("Temperature = ");
+  // Serial.print(bmp.temperature);
+  // Serial.println(" *C");
 
-  Serial.print("Pressure = ");
-  Serial.print(bmp.pressure / 100.0);
-  Serial.println(" hPa");
+  // Serial.print("Pressure = ");
+  // Serial.print(bmp.pressure / 100.0);
+  // Serial.println(" hPa");
 
-  Serial.print("Approx. Altitude = ");
-  Serial.print(bmp.readAltitude(SEALEVELPRESSURE_HPA));
-  Serial.println(" m");
+  // Serial.print("Approx. Altitude = ");
+  // Serial.print(bmp.readAltitude(SEALEVELPRESSURE_HPA));
+  // Serial.println(" m");
+
+  logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, bmp.temperature,
+                 (bmp.pressure / 100.0),
+                 bmp.readAltitude(SEALEVELPRESSURE_HPA));
 }
 
 void loop() {
