@@ -266,6 +266,24 @@ void collectLsm6d() {
   }
 }
 
+void collectBmp() {
+  if (!bmp.performReading()) {
+    Serial.println("Failed to read MBP388");
+    return;
+  }
+  Serial.print("Temperature = ");
+  Serial.print(bmp.temperature);
+  Serial.println(" *C");
+
+  Serial.print("Pressure = ");
+  Serial.print(bmp.pressure / 100.0);
+  Serial.println(" hPa");
+
+  Serial.print("Approx. Altitude = ");
+  Serial.print(bmp.readAltitude(SEALEVELPRESSURE_HPA));
+  Serial.println(" m");
+}
+
 void loop() {
   unsigned long t = millis();
 
@@ -282,6 +300,10 @@ void loop() {
   collectLsm6d();
   // ####################
 
+  // BMP
+  collectBmp();
+  // ####################
+
   if (t - startTime > LOG_DURATION_MS) {
     logFile.flush();
     logFile.close();
@@ -289,28 +311,6 @@ void loop() {
     while (1)
       ;
   }
-  // ####################
-
-  // ####################
-
-  /*FURTHER ADDED CODE FOR BMP388
-  if (! bmp.performReading()) {
-    Serial.println("Failed to read MBP388");
-    return;
-  }
-  Serial.print("Temperature = ");
-  Serial.print(bmp.temperature);
-  Serial.println(" *C");
-
-  Serial.print("Pressure = ");
-  Serial.print(bmp.pressure / 100.0);
-  Serial.println(" hPa");
-
-  Serial.print("Approx. Altitude = ");
-  Serial.print(bmp.readAltitude(SEALEVELPRESSURE_HPA));
-  Serial.println(" m");
-
-  */
 
   delay(500);
 }
