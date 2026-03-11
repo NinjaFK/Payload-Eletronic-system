@@ -250,6 +250,22 @@ void collectAdxlData() {
                  event.acceleration.y, event.acceleration.z);
 }
 
+void collectLsm6d() {
+  if (IMU.accelerationAvailable()) {
+    IMU.readAcceleration(x, y, z);
+
+    Serial.print(t);
+    Serial.print(",");
+    Serial.print(x, 4);
+    Serial.print(",");
+    Serial.print(y, 4);
+    Serial.print(",");
+    Serial.println(z, 4);
+
+    logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
+  }
+}
+
 void loop() {
   unsigned long t = millis();
 
@@ -263,28 +279,8 @@ void loop() {
   // ####################
 
   // LSM6DSO32
+  collectLsm6d();
   // ####################
-
-  // if (IMU.accelerationAvailable())
-  // {
-  //   IMU.readAcceleration(x, y, z);
-
-  //   Serial.print(t);
-  //   Serial.print(",");
-  //   Serial.print(x, 4);
-  //   Serial.print(",");
-  //   Serial.print(y, 4);
-  //   Serial.print(",");
-  //   Serial.println(z, 4);
-
-  //   logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, x, y, z);
-
-  //   if (t % 1000 > 500)
-  //   {
-  //     Serial.println("Wrote to SD");
-  //     logFile.flush();
-  //   }
-  // }
 
   if (t - startTime > LOG_DURATION_MS) {
     logFile.flush();
