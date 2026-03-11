@@ -9,42 +9,137 @@
 #include <Adafruit_Sensor.h>
 #include <Arduino_LSM6DSOX.h>
 
+// RF
+#include <LoRa.h>
+
 // SD
 #include "SdFat.h"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
+
+// LoRa pins/frequency (adjust to your wiring)
+#define RFM95_CS 10
+#define RFM95_RST 9
+#define RFM95_INT 2
+#define RF95_FREQ 915E6
+
+// Power switch control pin (Teensy GPIO -> TPS1H200A IN)
+// Update this to the exact pin used on your PCB.
+#define SENSOR_PWR_EN_PIN 6
+
+// IMU I2C addresses
 #define LSM6DSO32_ADDR_1 0x6A
 #define LSM6DSO32_ADDR_2 0x6B
 
-const unsigned long LOG_INTERVAL_MS = 20;   // ~50 Hz
+// Logging timing
+const unsigned long LOG_INTERVAL_MS = 20; // ~50 Hz
 const unsigned long FLUSH_INTERVAL_MS = 1000;
-const unsigned long LOG_DURATION_MS = 10000;
 
 SdFs sd;
 FsFile logFile;
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
 
-Adafruit_ADXL375 accel(12345, &Wire);  // I2C mode
+// Sensor objects
+Adafruit_ADXL375 accel(12345, &Wire); // I2C mode
 Adafruit_BMP3XX bmp;
 Adafruit_MPR121 cap;
 LSM6DSOXClass imu1(Wire, LSM6DSO32_ADDR_1);
 LSM6DSOXClass imu2(Wire, LSM6DSO32_ADDR_2);
 
+// Runtime state
+bool systemPowered = false;
+bool loggingActive = false;
+unsigned long startTime = 0;
+unsigned long lastLogMs = 0;
+unsigned long lastFlushMs = 0;
+
+// Sensor health flags
 bool adxlOk = false;
 bool imu1Ok = false;
 bool imu2Ok = false;
 bool capOk = false;
 bool bmpOk = false;
 
-unsigned long startTime = 0;
-unsigned long lastLogMs = 0;
-unsigned long lastFlushMs = 0;
+bool createNextLogFile() {
+  char filename[16];
+
+  for (int i = 0; i < 1000; i++) {
+    snprintf(filename, sizeof(filename), "log%03d.csv", i);
+    if (!sd.exists(filename)) {
+      logFile = sd.open(filename, O_WRITE | O_CREAT | O_TRUNC);
+      if (!logFile) {
+        return false;
+      }
+
+      logFile.println("ms,adxl_x,adxl_y,adxl_z,imu1_ax,imu1_ay,imu1_az,imu1_gx,"
+                      "imu1_gy,imu1_gz,imu2_ax,imu2_ay,imu2_az,imu2_gx,imu2_gy,"
+                      "imu2_gz,temp_c,press_hpa,alt_m,sensor_status");
+      logFile.flush();
+      Serial.print("Opened ");
+      Serial.println(filename);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void powerSensorsOn() {
+  if (systemPowered) {
+    return;
+  }
+
+  digitalWrite(SENSOR_PWR_EN_PIN, HIGH);
+  delay(50); // rail settle
+  systemPowered = true;
+  Serial.println("Sensor rail ON");
+}
+
+void powerSensorsOff() {
+  if (!systemPowered) {
+    return;
+  }
+
+  digitalWrite(SENSOR_PWR_EN_PIN, LOW);
+  systemPowered = false;
+  Serial.println("Sensor rail OFF");
+}
 
 void initSensors() {
-  adxlOk = accel.begin();
-  imu1Ok = imu1.begin();
-  imu2Ok = imu2.begin();
-  capOk = cap.begin();
+  // Reset flags each start attempt.
+  adxlOk = false;
+  imu1Ok = false;
+  imu2Ok = false;
+  capOk = false;
+  bmpOk = false;
+
+  if (accel.begin()) {
+    adxlOk = true;
+    Serial.println("ADXL375 detected");
+  } else {
+    Serial.println("ADXL375 not detected");
+  }
+
+  if (imu1.begin()) {
+    imu1Ok = true;
+    Serial.println("LSM6DSO32 #1 detected at 0x6A");
+  } else {
+    Serial.println("LSM6DSO32 #1 not detected at 0x6A");
+  }
+
+  if (imu2.begin()) {
+    imu2Ok = true;
+    Serial.println("LSM6DSO32 #2 detected at 0x6B");
+  } else {
+    Serial.println("LSM6DSO32 #2 not detected at 0x6B");
+  }
+
+  if (cap.begin()) {
+    capOk = true;
+    Serial.println("MPR121 detected");
+  } else {
+    Serial.println("MPR121 not detected");
+  }
 
   if (bmp.begin_I2C()) {
     bmpOk = true;
@@ -52,8 +147,69 @@ void initSensors() {
     bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
     bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
     bmp.setOutputDataRate(BMP3_ODR_50_HZ);
+    Serial.println("BMP388 detected");
   } else {
-    bmpOk = false;
+    Serial.println("BMP388 not detected");
+  }
+}
+
+void stopLogging(const char *reason) {
+  if (loggingActive && logFile) {
+    logFile.flush();
+    logFile.close();
+    Serial.print("Logging stopped: ");
+    Serial.println(reason);
+  }
+
+  loggingActive = false;
+  powerSensorsOff();
+}
+
+void startLogging() {
+  if (loggingActive) {
+    return;
+  }
+
+  powerSensorsOn();
+  initSensors();
+
+  if (!createNextLogFile()) {
+    Serial.println("Could not create log file");
+    powerSensorsOff();
+    return;
+  }
+
+  startTime = millis();
+  lastLogMs = startTime;
+  lastFlushMs = startTime;
+  loggingActive = true;
+  Serial.println("Logging started");
+}
+
+void handleLoRaCommands() {
+  int packetSize = LoRa.parsePacket();
+  if (!packetSize) {
+    return;
+  }
+
+  String cmd;
+  while (LoRa.available()) {
+    cmd += (char)LoRa.read();
+  }
+  cmd.trim();
+  cmd.toUpperCase();
+
+  Serial.print("LoRa cmd: ");
+  Serial.println(cmd);
+
+  if (cmd == "START") {
+    startLogging();
+  } else if (cmd == "STOP") {
+    stopLogging("RF STOP command");
+  } else if (cmd == "PING") {
+    LoRa.beginPacket();
+    LoRa.print("PONG");
+    LoRa.endPacket();
   }
 }
 
@@ -106,17 +262,20 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 4);
   }
 
-  logFile.printf(
-      "%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%lu\n",
-      nowMs, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az, imu1Gx, imu1Gy,
-      imu1Gz, imu2Ax, imu2Ay, imu2Az, imu2Gx, imu2Gy, imu2Gz, tempC,
-      pressHpa, altM, (unsigned long)sensorStatus);
+  logFile.printf("%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%."
+                 "4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%lu\n",
+                 nowMs, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az, imu1Gx,
+                 imu1Gy, imu1Gz, imu2Ax, imu2Ay, imu2Az, imu2Gx, imu2Gy, imu2Gz,
+                 tempC, pressHpa, altM, (unsigned long)sensorStatus);
 }
 
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) {
   }
+
+  pinMode(SENSOR_PWR_EN_PIN, OUTPUT);
+  digitalWrite(SENSOR_PWR_EN_PIN, LOW); // keep sensors/load rail OFF at boot
 
   Wire.begin();
 
@@ -126,25 +285,31 @@ void setup() {
     }
   }
 
-  logFile = sd.open("log000.csv", O_WRITE | O_CREAT | O_TRUNC);
-  if (!logFile) {
-    Serial.println("Could not open log file");
+  pinMode(RFM95_RST, OUTPUT);
+  digitalWrite(RFM95_RST, HIGH);
+  delay(10);
+  digitalWrite(RFM95_RST, LOW);
+  delay(10);
+  digitalWrite(RFM95_RST, HIGH);
+  delay(10);
+
+  LoRa.setPins(RFM95_CS, RFM95_RST, RFM95_INT);
+  if (!LoRa.begin(RF95_FREQ)) {
+    Serial.println("LoRa init failed");
     while (1) {
     }
   }
-
-  logFile.println("ms,adxl_x,adxl_y,adxl_z,imu1_ax,imu1_ay,imu1_az,imu1_gx,imu1_gy,imu1_gz,imu2_ax,imu2_ay,imu2_az,imu2_gx,imu2_gy,imu2_gz,temp_c,press_hpa,alt_m,sensor_status");
-  logFile.flush();
-
-  initSensors();
-
-  startTime = millis();
-  lastLogMs = startTime;
-  lastFlushMs = startTime;
+  Serial.println("LoRa ready; waiting for START/STOP commands");
 }
 
 void loop() {
   unsigned long nowMs = millis();
+
+  handleLoRaCommands();
+
+  if (!loggingActive) {
+    return;
+  }
 
   if (nowMs - lastLogMs >= LOG_INTERVAL_MS) {
     lastLogMs = nowMs;
@@ -154,12 +319,6 @@ void loop() {
   if (nowMs - lastFlushMs >= FLUSH_INTERVAL_MS) {
     lastFlushMs = nowMs;
     logFile.flush();
-  }
-
-  if (nowMs - startTime >= LOG_DURATION_MS) {
-    logFile.flush();
-    logFile.close();
-    while (1) {
-    }
+    Serial.println("SD flush");
   }
 }
