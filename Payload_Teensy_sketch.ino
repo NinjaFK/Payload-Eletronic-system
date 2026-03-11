@@ -1,14 +1,14 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <SPI.h>
 #include <SD.h>
+#include <SPI.h>
+#include <Wire.h>
 
 // Sensors
-#include <Adafruit_Sensor.h>
-#include <Arduino_LSM6DSOX.h>
 #include <Adafruit_ADXL375.h>
 #include <Adafruit_BMP3XX.h>
 #include <Adafruit_MPR121.h>
+#include <Adafruit_Sensor.h>
+#include <Arduino_LSM6DSOX.h>
 
 // RF
 #include <LoRa.h>
@@ -34,12 +34,10 @@ FsFile logFile;
 unsigned long startTime;
 const unsigned long LOG_DURATION_MS = 10000;
 
-void displayDataRate(void)
-{
+void displayDataRate(void) {
   Serial.print("Data Rate:    ");
 
-  switch (accel.getDataRate())
-  {
+  switch (accel.getDataRate()) {
   case ADXL343_DATARATE_3200_HZ:
     Serial.print("3200 ");
     break;
@@ -95,8 +93,7 @@ void displayDataRate(void)
   Serial.println(" Hz");
 }
 
-void setup()
-{
+void setup() {
   // Serial (output)
   Serial.begin(115200);
 
@@ -105,23 +102,20 @@ void setup()
     ;
 
   // SD card
-  if (!sd.begin(SD_CONFIG))
-  {
+  if (!sd.begin(SD_CONFIG)) {
     Serial.println("SD init failed");
     while (1)
       ;
   }
 
-  if (sd.exists("log000.txt"))
-  {
+  if (sd.exists("log000.txt")) {
     Serial.println("Deleting old log000.txt");
     sd.remove("log000.txt");
   }
 
   FsFile f = sd.open("log000.txt", O_WRITE | O_CREAT | O_TRUNC);
 
-  if (!f)
-  {
+  if (!f) {
     Serial.println("Open/create failed");
     while (1)
       ;
@@ -131,8 +125,7 @@ void setup()
 
   logFile = sd.open("log000.txt", FILE_WRITE);
 
-  if (!logFile)
-  {
+  if (!logFile) {
     Serial.println("Could not open log file");
     while (1)
       ;
@@ -162,14 +155,11 @@ void setup()
 
   Data Rate:    100  Hz
   */
-  if (!accel.begin())
-  { // use the I2C interface over STEMMA QT
+  if (!accel.begin()) { // use the I2C interface over STEMMA QT
     Serial.println("ADXL375 not detected!");
     while (0)
       ;
-  }
-  else
-  {
+  } else {
     Serial.println("ADXL375 detected!");
   }
 
@@ -178,25 +168,19 @@ void setup()
   // Serial.println("");
 
   // Accel LSM6DSO32
-  if (!IMU.begin())
-  { // use the I2C interface over STEMMA QT
+  if (!IMU.begin()) { // use the I2C interface over STEMMA QT
     Serial.println("LSM6DSO32 not detected!");
     while (0)
       ;
-  }
-  else
-  {
+  } else {
     Serial.println("LSM6DSO32 detected!");
   }
 
-  if (!cap.begin())
-  {
+  if (!cap.begin()) {
     Serial.println("MPR121 not detected!");
     while (0)
       ;
-  }
-  else
-  {
+  } else {
     Serial.println("MPR121 detected!");
   }
 
@@ -244,34 +228,32 @@ void setup()
 }
 
 // Adxl375 collecting
-void collectAdxlData()
-{
-  sensors_event_t event;  
-  
-    accel.getEvent(&event);
-  
-    // Serial.print("X: ");
-    // Serial.print(event.acceleration.x);
-    // Serial.print("  ");
-    // Serial.print("Y: ");
-    // Serial.print(event.acceleration.y);
-    // Serial.print("  ");
-    // Serial.print("Z: ");
-    // Serial.print(event.acceleration.z);
-    // Serial.print("  ");
-    // Serial.println("m/s^2 ");
-    Serial.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
-  
-    logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x, event.acceleration.y, event.acceleration.z);
+void collectAdxlData() {
+  sensors_event_t event;
+
+  accel.getEvent(&event);
+
+  // Serial.print("X: ");
+  // Serial.print(event.acceleration.x);
+  // Serial.print("  ");
+  // Serial.print("Y: ");
+  // Serial.print(event.acceleration.y);
+  // Serial.print("  ");
+  // Serial.print("Z: ");
+  // Serial.print(event.acceleration.z);
+  // Serial.print("  ");
+  // Serial.println("m/s^2 ");
+  Serial.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x,
+                event.acceleration.y, event.acceleration.z);
+
+  logFile.printf("%lu,%.4f,%.4f,%.4f\n", t, event.acceleration.x,
+                 event.acceleration.y, event.acceleration.z);
 }
 
-
-void loop()
-{
+void loop() {
   unsigned long t = millis();
 
-  if (t % 1000 > 500)
-  {
+  if (t % 1000 > 500) {
     Serial.println("Wrote to SD");
     logFile.flush();
   }
@@ -304,8 +286,7 @@ void loop()
   //   }
   // }
 
-  if (t - startTime > LOG_DURATION_MS)
-  {
+  if (t - startTime > LOG_DURATION_MS) {
     logFile.flush();
     logFile.close();
     Serial.println("Logging complete — file closed.");
