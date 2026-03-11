@@ -231,7 +231,7 @@ void setup() {
   BMP3_ODR_0_05_HZ, BMP3_ODR_0_02_HZ, BMP3_ODR_0_01_HZ, BMP3_ODR_0_006_HZ,
   BMP3_ODR_0_003_HZ, or BMP3_ODR_0_001_HZ
   */
-  startTime = milis();
+  startTime = millis();
 }
 
 // Adxl375 collecting
