@@ -34,6 +34,12 @@ unsigned long startTime;
 const unsigned long LOG_DURATION_MS = 10000;
 unsigned long t;
 
+// Sensor fail flags
+bool adxlOk = false;
+bool imuOk = false;
+bool capOk = false;
+bool bmpOk = false;
+
 void displayDataRate(void) {
   Serial.print("Data Rate:    ");
 
@@ -157,10 +163,10 @@ void setup() {
   */
   if (!accel.begin()) { // use the I2C interface over STEMMA QT
     Serial.println("ADXL375 not detected!");
-    while (0)
-      ;
+    adxlOk = false;
   } else {
     Serial.println("ADXL375 detected!");
+    adxlOk = true;
   }
 
   // accel.printSensorDetails();
@@ -170,32 +176,33 @@ void setup() {
   // Accel LSM6DSO32
   if (!IMU.begin()) { // use the I2C interface over STEMMA QT
     Serial.println("LSM6DSO32 not detected!");
-    while (0)
-      ;
+    imuOk = false;
   } else {
     Serial.println("LSM6DSO32 detected!");
+    imuOk = true;
   }
 
   if (!cap.begin()) {
     Serial.println("MPR121 not detected!");
-    while (0)
-      ;
+    capOk = false;
   } else {
     Serial.println("MPR121 detected!");
+    capOk = true;
   }
 
   // ADDED CODE FOR BMP388
   if (!bmp.begin_I2C()) {
     Serial.println("BMP388 not detected!");
-    while (0)
-      ;
-  }
+    bmpOk = false;
+  } else {
+    bmpOk = true;
 
-  // Set up oversampling and filter initialization
-  bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
-  bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
-  bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
-  bmp.setOutputDataRate(BMP3_ODR_50_HZ);
+    // Set up oversampling and filter initialization
+    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
+    bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
+    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
+    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
+  }
 
   /*NOTE: im not sure what oversampling or filter rate would
   be best so below is a list of all the possible settings, although
@@ -229,6 +236,10 @@ void setup() {
 
 // Adxl375 collecting
 void collectAdxlData() {
+  if (!adxlOk) {
+    return;
+  }
+
   sensors_event_t event;
 
   accel.getEvent(&event);
@@ -251,6 +262,10 @@ void collectAdxlData() {
 }
 
 void collectLsm6d() {
+  if (!imuOk) {
+    return;
+  }
+
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(x, y, z);
 
@@ -267,6 +282,10 @@ void collectLsm6d() {
 }
 
 void collectBmp() {
+  if (!bmpOk) {
+    return;
+  }
+
   if (!bmp.performReading()) {
     Serial.println("Failed to read MBP388");
     return;
