@@ -34,6 +34,8 @@
 // Logging timing
 const unsigned long LOG_INTERVAL_MS = 20; // ~50 Hz
 const unsigned long FLUSH_INTERVAL_MS = 1000;
+const unsigned long MAX_LOG_DURATION_MS = 120000; // auto-stop after START
+const bool AUTO_START_ON_BOOT = false;            // set true for bench tests
 
 SdFs sd;
 FsFile logFile;
@@ -49,6 +51,7 @@ LSM6DSOXClass imu2(Wire, LSM6DSO32_ADDR_2);
 // Runtime state
 bool systemPowered = false;
 bool loggingActive = false;
+bool loraOk = false;
 unsigned long startTime = 0;
 unsigned long lastLogMs = 0;
 unsigned long lastFlushMs = 0;
@@ -187,6 +190,10 @@ void startLogging() {
 }
 
 void handleLoRaCommands() {
+  if (!loraOk) {
+    return;
+  }
+
   int packetSize = LoRa.parsePacket();
   if (!packetSize) {
     return;
@@ -210,6 +217,31 @@ void handleLoRaCommands() {
     LoRa.beginPacket();
     LoRa.print("PONG");
     LoRa.endPacket();
+  }
+}
+
+void handleSerialCommands() {
+  if (!Serial.available()) {
+    return;
+  }
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  cmd.toUpperCase();
+
+  if (cmd.length() == 0) {
+    return;
+  }
+
+  Serial.print("Serial cmd: ");
+  Serial.println(cmd);
+
+  if (cmd == "START") {
+    startLogging();
+  } else if (cmd == "STOP") {
+    stopLogging("Serial STOP command");
+  } else if (cmd == "PING") {
+    Serial.println("PONG");
   }
 }
 
@@ -295,17 +327,23 @@ void setup() {
 
   LoRa.setPins(RFM95_CS, RFM95_RST, RFM95_INT);
   if (!LoRa.begin(RF95_FREQ)) {
-    Serial.println("LoRa init failed");
-    while (1) {
-    }
+    Serial.println("LoRa init failed, continuing without RF control");
+    loraOk = false;
+  } else {
+    loraOk = true;
+    Serial.println("LoRa ready; waiting for START/STOP commands");
   }
-  Serial.println("LoRa ready; waiting for START/STOP commands");
+
+  if (AUTO_START_ON_BOOT) {
+    startLogging();
+  }
 }
 
 void loop() {
   unsigned long nowMs = millis();
 
   handleLoRaCommands();
+  handleSerialCommands();
 
   if (!loggingActive) {
     return;
@@ -320,5 +358,9 @@ void loop() {
     lastFlushMs = nowMs;
     logFile.flush();
     Serial.println("SD flush");
+  }
+
+  if (nowMs - startTime >= MAX_LOG_DURATION_MS) {
+    stopLogging("max duration reached");
   }
 }
