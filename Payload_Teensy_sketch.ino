@@ -29,6 +29,9 @@
 #define VALVE_CTRL_PIN 5
 #define FLOW_SENSOR_PIN 4
 #define VALVE_ACTIVE_HIGH true
+const bool USE_SENSOR_POWER_SWITCH = false; // debug: bypass rail toggle
+const bool ENABLE_FLOW_SENSOR = false;   // set true when flow sensor is wired
+const bool ENABLE_VALVE_CONTROL = false; // set true when valve driver is wired
 
 // IMU I2C addresses
 #define LSM6DSO32_ADDR_1 0x6A
@@ -38,8 +41,9 @@
 const unsigned long LOG_INTERVAL_MS = 20; // ~50 Hz
 const unsigned long FLUSH_INTERVAL_MS = 1000;
 const unsigned long FLOW_UPDATE_MS = 1000;
-const unsigned long MAX_LOG_DURATION_MS = 120000; // auto-stop after START
-const bool AUTO_START_ON_BOOT = false;            // set true for bench tests
+const unsigned long MAX_LOG_DURATION_MS = 20000; // auto-stop after START (20 s)
+const bool AUTO_START_ON_BOOT = false;           // set true for bench tests
+const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
 // Calibrate this for your exact flow sensor model.
 const float FLOW_PULSES_PER_LITER = 450.0f;
 
@@ -104,6 +108,12 @@ bool createNextLogFile() {
 }
 
 void powerSensorsOn() {
+  if (!USE_SENSOR_POWER_SWITCH) {
+    systemPowered = true;
+    Serial.println("Sensor rail toggle bypassed (debug)");
+    return;
+  }
+
   if (systemPowered) {
     return;
   }
@@ -115,6 +125,11 @@ void powerSensorsOn() {
 }
 
 void powerSensorsOff() {
+  if (!USE_SENSOR_POWER_SWITCH) {
+    systemPowered = false;
+    return;
+  }
+
   if (!systemPowered) {
     return;
   }
@@ -125,6 +140,11 @@ void powerSensorsOff() {
 }
 
 void setValve(bool open) {
+  if (!ENABLE_VALVE_CONTROL) {
+    valveOpen = false;
+    return;
+  }
+
   valveOpen = open;
   bool pinState = VALVE_ACTIVE_HIGH ? open : !open;
   // High current load path is external (MOSFET/smart switch). This only drives
@@ -133,6 +153,12 @@ void setValve(bool open) {
 }
 
 void updateFlowStats(unsigned long nowMs) {
+  if (!ENABLE_FLOW_SENSOR) {
+    flowHz = 0.0f;
+    flowLpm = 0.0f;
+    return;
+  }
+
   if (nowMs - lastFlowUpdateMs < FLOW_UPDATE_MS) {
     return;
   }
@@ -167,6 +193,18 @@ void initSensors() {
   } else {
     Serial.println("ADXL375 not detected");
   }
+
+  if (TEST_ADXL_ONLY) {
+    Serial.println("TEST_ADXL_ONLY enabled: skipping IMU/MPR121/BMP/flow");
+    imu1Ok = false;
+    imu2Ok = false;
+    capOk = false;
+    bmpOk = false;
+    flowOk = false;
+    return;
+  }
+
+  flowOk = ENABLE_FLOW_SENSOR;
 
   if (imu1.begin()) {
     imu1Ok = true;
@@ -375,12 +413,18 @@ void setup() {
 
   pinMode(SENSOR_PWR_EN_PIN, OUTPUT);
   digitalWrite(SENSOR_PWR_EN_PIN, LOW); // keep sensors/load rail OFF at boot
-  pinMode(VALVE_CTRL_PIN, OUTPUT);
-  setValve(false);
-  pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseISR,
-                  FALLING);
-  flowOk = true;
+  if (ENABLE_VALVE_CONTROL) {
+    pinMode(VALVE_CTRL_PIN, OUTPUT);
+    setValve(false);
+  }
+  if (ENABLE_FLOW_SENSOR) {
+    pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseISR,
+                    FALLING);
+    flowOk = true;
+  } else {
+    flowOk = false;
+  }
 
   Wire.begin();
 
@@ -421,6 +465,10 @@ void loop() {
   if (!loggingActive) {
     return;
   }
+
+  // START may have been processed above; refresh so time deltas are computed
+  // against the same or newer timestamp than startTime/lastLogMs.
+  nowMs = millis();
 
   if (nowMs - lastLogMs >= LOG_INTERVAL_MS) {
     lastLogMs = nowMs;
