@@ -18,19 +18,19 @@
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 // LoRa pins/frequency (adjust to your wiring)
-#define RFM95_CS 10
-#define RFM95_RST 9
-#define RFM95_INT 2
+#define RFM95_CS 4
+#define RFM95_RST 2
+#define RFM95_INT 3
 #define RF95_FREQ 915E6
 
 // Power switch control pin (Teensy GPIO -> TPS1H200A IN)
 // Update this to the exact pin used on your PCB.
 #define SENSOR_PWR_EN_PIN 6
 #define VALVE_CTRL_PIN 5
-#define FLOW_SENSOR_PIN 4
+#define FLOW_SENSOR_PIN 7
 #define VALVE_ACTIVE_HIGH true
 const bool USE_SENSOR_POWER_SWITCH = false; // debug: bypass rail toggle
-const bool ENABLE_FLOW_SENSOR = false;   // set true when flow sensor is wired
+const bool ENABLE_FLOW_SENSOR = true;    // set true when flow sensor is wired
 const bool ENABLE_VALVE_CONTROL = false; // set true when valve driver is wired
 
 // IMU I2C addresses
@@ -44,8 +44,8 @@ const unsigned long FLOW_UPDATE_MS = 1000;
 const unsigned long MAX_LOG_DURATION_MS = 20000; // auto-stop after START (20 s)
 const bool AUTO_START_ON_BOOT = false;           // set true for bench tests
 const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
-// Calibrate this for your exact flow sensor model.
-const float FLOW_PULSES_PER_LITER = 450.0f;
+// Flow meter spec: F(Hz) = 98 * Q(L/min) => pulses/liter = 98*60 = 5880.
+const float FLOW_PULSES_PER_LITER = 5880.0f;
 
 SdFs sd;
 FsFile logFile;
@@ -177,6 +177,35 @@ void updateFlowStats(unsigned long nowMs) {
   flowHz = (1000.0f * pulses) / (float)elapsedMs;
   flowLpm = (flowHz * 60.0f) / FLOW_PULSES_PER_LITER;
   lastFlowUpdateMs = nowMs;
+}
+
+void scanI2CBus() {
+  Serial.println("I2C scan start");
+  uint8_t found = 0;
+
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    uint8_t err = Wire.endTransmission();
+    if (err == 0) {
+      Serial.print("  found 0x");
+      if (addr < 16) {
+        Serial.print('0');
+      }
+      Serial.println(addr, HEX);
+      found++;
+    } else if (err == 4) {
+      Serial.print("  unknown error at 0x");
+      if (addr < 16) {
+        Serial.print('0');
+      }
+      Serial.println(addr, HEX);
+    }
+  }
+
+  if (found == 0) {
+    Serial.println("  no I2C devices found");
+  }
+  Serial.println("I2C scan done");
 }
 
 void initSensors() {
@@ -334,6 +363,8 @@ void handleSerialCommands() {
     startLogging();
   } else if (cmd == "STOP") {
     stopLogging("Serial STOP command");
+  } else if (cmd == "SCAN") {
+    scanI2CBus();
   } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
     setValve(true);
   } else if (cmd == "CLOSE" || cmd == "VALVE_OFF") {
