@@ -22,6 +22,9 @@
 #define RFM95_RST 2
 #define RFM95_INT 3
 #define RF95_FREQ 915E6
+const uint8_t LORA_LOCAL_ADDRESS = 0xDD;  // payload
+const uint8_t LORA_GROUND_ADDRESS = 0xCC; // home station
+const uint8_t LORA_BROADCAST = 0xFF;
 
 // Power switch control pin (Teensy GPIO -> TPS1H200A IN)
 // Update this to the exact pin used on your PCB.
@@ -74,6 +77,7 @@ bool capOk = false;
 bool bmpOk = false;
 bool flowOk = false;
 bool valveOpen = false;
+byte loraMsgCount = 0;
 
 volatile uint32_t flowPulseCount = 0;
 float flowHz = 0.0f;
@@ -281,6 +285,19 @@ void stopLogging(const char *reason) {
   powerSensorsOff();
 }
 
+void sendLoRaMessage(uint8_t destination, const String &outgoing) {
+  if (!loraOk)
+    return;
+
+  LoRa.beginPacket();
+  LoRa.write(destination);
+  LoRa.write(LORA_LOCAL_ADDRESS);
+  LoRa.write(loraMsgCount++);
+  LoRa.write((uint8_t)outgoing.length());
+  LoRa.print(outgoing);
+  LoRa.endPacket();
+}
+
 void startLogging() {
   if (loggingActive) {
     return;
@@ -308,6 +325,33 @@ void startLogging() {
   Serial.println("Logging started");
 }
 
+void executeCommand(String cmd, const char *source,
+                    uint8_t sender = LORA_GROUND_ADDRESS) {
+  cmd.trim();
+  cmd.toUpperCase();
+
+  if (cmd.length() == 0)
+    return;
+
+  Serial.print(source);
+  Serial.print(" cmd: ");
+  Serial.println(cmd);
+
+  if (cmd == "START" || cmd == "BUTTON PRESSED") {
+    startLogging();
+  } else if (cmd == "STOP") {
+    stopLogging("STOP command");
+  } else if (cmd == "SCAN") {
+    scanI2CBus();
+  } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
+    setValve(true);
+  } else if (cmd == "CLOSE" || cmd == "VALVE_OFF") {
+    setValve(false);
+  } else if (cmd == "PING" || cmd == "HB") {
+    sendLoRaMessage(sender, "PONG");
+  }
+}
+
 void handleLoRaCommands() {
   if (!loraOk) {
     return;
@@ -318,29 +362,34 @@ void handleLoRaCommands() {
     return;
   }
 
-  String cmd;
-  while (LoRa.available()) {
-    cmd += (char)LoRa.read();
+  uint8_t rx[256];
+  size_t n = 0;
+  while (LoRa.available() && n < sizeof(rx)) {
+    rx[n++] = (uint8_t)LoRa.read();
   }
-  cmd.trim();
-  cmd.toUpperCase();
+  if (n == 0)
+    return;
 
-  Serial.print("LoRa cmd: ");
-  Serial.println(cmd);
+  // Preferred mode: framed packet [dest, src, msgId, len, payload...]
+  if (n >= 4 && rx[3] == (uint8_t)(n - 4)) {
+    uint8_t recipient = rx[0];
+    uint8_t sender = rx[1];
+    if (recipient != LORA_LOCAL_ADDRESS && recipient != LORA_BROADCAST) {
+      return;
+    }
 
-  if (cmd == "START") {
-    startLogging();
-  } else if (cmd == "STOP") {
-    stopLogging("RF STOP command");
-  } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
-    setValve(true);
-  } else if (cmd == "CLOSE" || cmd == "VALVE_OFF") {
-    setValve(false);
-  } else if (cmd == "PING") {
-    LoRa.beginPacket();
-    LoRa.print("PONG");
-    LoRa.endPacket();
+    String payload;
+    for (size_t i = 4; i < n; i++)
+      payload += (char)rx[i];
+    executeCommand(payload, "LoRa", sender);
+    return;
   }
+
+  // Compatibility mode: plain-text packet.
+  String plain;
+  for (size_t i = 0; i < n; i++)
+    plain += (char)rx[i];
+  executeCommand(plain, "LoRa");
 }
 
 void handleSerialCommands() {
@@ -349,29 +398,7 @@ void handleSerialCommands() {
   }
 
   String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
-  cmd.toUpperCase();
-
-  if (cmd.length() == 0) {
-    return;
-  }
-
-  Serial.print("Serial cmd: ");
-  Serial.println(cmd);
-
-  if (cmd == "START") {
-    startLogging();
-  } else if (cmd == "STOP") {
-    stopLogging("Serial STOP command");
-  } else if (cmd == "SCAN") {
-    scanI2CBus();
-  } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
-    setValve(true);
-  } else if (cmd == "CLOSE" || cmd == "VALVE_OFF") {
-    setValve(false);
-  } else if (cmd == "PING") {
-    Serial.println("PONG");
-  }
+  executeCommand(cmd, "Serial");
 }
 
 void collectAndLogRow(unsigned long nowMs) {
