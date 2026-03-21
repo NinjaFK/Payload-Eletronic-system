@@ -47,6 +47,15 @@ const unsigned long FLOW_UPDATE_MS = 1000;
 const unsigned long MAX_LOG_DURATION_MS = 20000; // auto-stop after START (20 s)
 const bool AUTO_START_ON_BOOT = false;           // set true for bench tests
 const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
+
+// Valve
+const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = true;
+const float GRAVITY_MS2 = 9.80665f;
+const float LAUNCH_ACCEL_THRESHOLD_MS2 = 18.0f; // ~1.8 g
+const unsigned long LAUNCH_CONFIRM_MS = 80;
+const float MICROGRAVITY_ACCEL_MAX_MS2 = 2.5f; // ~0.25 g
+const unsigned long MICROGRAVITY_CONFIRM_MS = 150;
+
 // Flow meter spec: F(Hz) = 98 * Q(L/min) => pulses/liter = 98*60 = 5880.
 const float FLOW_PULSES_PER_LITER = 5880.0f;
 
@@ -77,12 +86,16 @@ bool capOk = false;
 bool bmpOk = false;
 bool flowOk = false;
 bool valveOpen = false;
+bool launchDetected = false;
+bool microgravityNow = false;
 byte loraMsgCount = 0;
 
 volatile uint32_t flowPulseCount = 0;
 float flowHz = 0.0f;
 float flowLpm = 0.0f;
 unsigned long lastFlowUpdateMs = 0;
+unsigned long launchConditionStartMs = 0;
+unsigned long microConditionStartMs = 0;
 
 void flowPulseISR() { flowPulseCount++; }
 
@@ -181,6 +194,99 @@ void updateFlowStats(unsigned long nowMs) {
   flowHz = (1000.0f * pulses) / (float)elapsedMs;
   flowLpm = (flowHz * 60.0f) / FLOW_PULSES_PER_LITER;
   lastFlowUpdateMs = nowMs;
+}
+
+bool sustainedFor(bool condition, unsigned long nowMs, unsigned long &sinceMs,
+                  unsigned long durationMs) {
+  if (!condition) {
+    sinceMs = 0;
+    return false;
+  }
+  if (sinceMs == 0) {
+    sinceMs = nowMs;
+  }
+  return (nowMs - sinceMs) >= durationMs;
+}
+
+float vectorMagnitude3(float x, float y, float z) {
+  return sqrtf(x * x + y * y + z * z);
+}
+
+bool tryGetAccelMagnitudeMs2(float adxlX, float adxlY, float adxlZ,
+                             float imu1Ax, float imu1Ay, float imu1Az,
+                             float imu2Ax, float imu2Ay, float imu2Az,
+                             float &accelMagMs2) {
+  if (isfinite(adxlX) && isfinite(adxlY) && isfinite(adxlZ)) {
+    accelMagMs2 = vectorMagnitude3(adxlX, adxlY, adxlZ);
+    return true;
+  }
+
+  float sum = 0.0f;
+  int count = 0;
+  if (isfinite(imu1Ax) && isfinite(imu1Ay) && isfinite(imu1Az)) {
+    sum += vectorMagnitude3(imu1Ax, imu1Ay, imu1Az) * GRAVITY_MS2;
+    count++;
+  }
+  if (isfinite(imu2Ax) && isfinite(imu2Ay) && isfinite(imu2Az)) {
+    sum += vectorMagnitude3(imu2Ax, imu2Ay, imu2Az) * GRAVITY_MS2;
+    count++;
+  }
+  if (count == 0) {
+    return false;
+  }
+
+  accelMagMs2 = sum / (float)count;
+  return true;
+}
+
+void resetFlightDetectionState() {
+  launchDetected = false;
+  microgravityNow = false;
+  launchConditionStartMs = 0;
+  microConditionStartMs = 0;
+}
+
+void updateFlightValveLogic(unsigned long nowMs, float adxlX, float adxlY,
+                            float adxlZ, float imu1Ax, float imu1Ay,
+                            float imu1Az, float imu2Ax, float imu2Ay,
+                            float imu2Az) {
+  if (!ENABLE_AUTO_VALVE_FLIGHT_LOGIC) {
+    return;
+  }
+
+  float accelMagMs2 = NAN;
+  if (!tryGetAccelMagnitudeMs2(adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az,
+                               imu2Ax, imu2Ay, imu2Az, accelMagMs2)) {
+    microgravityNow = false;
+    setValve(false);
+    return;
+  }
+
+  if (!launchDetected) {
+    bool launchCondition = accelMagMs2 >= LAUNCH_ACCEL_THRESHOLD_MS2;
+    if (sustainedFor(launchCondition, nowMs, launchConditionStartMs,
+                     LAUNCH_CONFIRM_MS)) {
+      launchDetected = true;
+      Serial.println("Flight state: launch detected");
+    }
+  }
+
+  bool prevMicrogravityNow = microgravityNow;
+  if (launchDetected) {
+    bool microCondition = accelMagMs2 <= MICROGRAVITY_ACCEL_MAX_MS2;
+    microgravityNow = sustainedFor(microCondition, nowMs, microConditionStartMs,
+                                   MICROGRAVITY_CONFIRM_MS);
+  } else {
+    microgravityNow = false;
+    microConditionStartMs = 0;
+  }
+
+  if (microgravityNow != prevMicrogravityNow) {
+    Serial.print("Flight state: microgravity ");
+    Serial.println(microgravityNow ? "entered" : "exited");
+  }
+
+  setValve(launchDetected && microgravityNow);
 }
 
 void scanI2CBus() {
@@ -282,6 +388,7 @@ void stopLogging(const char *reason) {
 
   loggingActive = false;
   setValve(false);
+  resetFlightDetectionState();
   powerSensorsOff();
 }
 
@@ -321,6 +428,7 @@ void startLogging() {
   noInterrupts();
   flowPulseCount = 0;
   interrupts();
+  resetFlightDetectionState();
   loggingActive = true;
   Serial.println("Logging started");
 }
@@ -452,8 +560,18 @@ void collectAndLogRow(unsigned long nowMs) {
   if (flowOk) {
     sensorStatus |= (1u << 5);
   }
+
+  updateFlightValveLogic(nowMs, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az,
+                         imu2Ax, imu2Ay, imu2Az);
+
   if (valveOpen) {
     sensorStatus |= (1u << 6);
+  }
+  if (launchDetected) {
+    sensorStatus |= (1u << 7);
+  }
+  if (microgravityNow) {
+    sensorStatus |= (1u << 8);
   }
 
   logFile.printf("%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%."
