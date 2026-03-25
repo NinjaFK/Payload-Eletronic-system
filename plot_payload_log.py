@@ -29,6 +29,25 @@ def read_log(path: Path):
     return rows, t_s
 
 
+def read_logs(paths):
+    all_rows = []
+    for path in paths:
+        with path.open("r", newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            continue
+        all_rows.extend(rows)
+
+    if not all_rows:
+        raise ValueError("No data rows found in selected log files")
+
+    ms = [to_float(r["ms"]) for r in all_rows]
+    t0 = ms[0]
+    t_s = [(m - t0) / 1000.0 for m in ms]
+    return all_rows, t_s
+
+
 def series(rows, key):
     return [to_float(r.get(key, "")) for r in rows]
 
@@ -166,30 +185,158 @@ def latest_log_file(base: Path):
     return candidates[-1]
 
 
+def all_log_files(base: Path):
+    candidates = sorted(base.glob("log*.csv"))
+    if not candidates:
+        raise FileNotFoundError(f"No log*.csv files found in {base}")
+    return candidates
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Plot payload CSV log by sensor.")
+    parser = argparse.ArgumentParser(description="Plot payload CSV log(s) by sensor.")
     parser.add_argument(
         "logfile",
         nargs="?",
-        help="Path to log CSV (default: latest log*.csv in current dir)",
+        help=(
+            "Path to log CSV or directory (default: all log*.csv in ./logfiles, "
+            "or in current dir if ./logfiles does not exist)"
+        ),
     )
     parser.add_argument(
         "--out",
         default="plots",
         help="Output directory for PNG files (default: plots)",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Combine all log*.csv files from the selected directory",
+    )
     args = parser.parse_args()
 
     cwd = Path.cwd()
-    log_path = Path(args.logfile) if args.logfile else latest_log_file(cwd)
     out_dir = Path(args.out)
+    selected = Path(args.logfile) if args.logfile else None
 
-    files = plot_file(log_path, out_dir)
+    if selected is None:
+        base = cwd / "logfiles"
+        if not base.exists():
+            base = cwd
+        log_paths = all_log_files(base)
+    elif selected.is_dir() or args.all:
+        base = selected if selected.is_dir() else selected.parent
+        log_paths = all_log_files(base)
+    else:
+        log_paths = [selected]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if len(log_paths) == 1:
+        files = plot_file(log_paths[0], out_dir)
+    else:
+        rows, t_s = read_logs(log_paths)
+        stem = "combined_logs"
+        results = []
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_adxl",
+                t_s,
+                {
+                    "adxl_x": series(rows, "adxl_x"),
+                    "adxl_y": series(rows, "adxl_y"),
+                    "adxl_z": series(rows, "adxl_z"),
+                },
+                "ADXL375 (combined logs)",
+            )
+        )
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_imu1_accel",
+                t_s,
+                {
+                    "imu1_ax": series(rows, "imu1_ax"),
+                    "imu1_ay": series(rows, "imu1_ay"),
+                    "imu1_az": series(rows, "imu1_az"),
+                },
+                "IMU1 Accel (combined logs)",
+            )
+        )
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_imu1_gyro",
+                t_s,
+                {
+                    "imu1_gx": series(rows, "imu1_gx"),
+                    "imu1_gy": series(rows, "imu1_gy"),
+                    "imu1_gz": series(rows, "imu1_gz"),
+                },
+                "IMU1 Gyro (combined logs)",
+            )
+        )
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_imu2_accel",
+                t_s,
+                {
+                    "imu2_ax": series(rows, "imu2_ax"),
+                    "imu2_ay": series(rows, "imu2_ay"),
+                    "imu2_az": series(rows, "imu2_az"),
+                },
+                "IMU2 Accel (combined logs)",
+            )
+        )
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_imu2_gyro",
+                t_s,
+                {
+                    "imu2_gx": series(rows, "imu2_gx"),
+                    "imu2_gy": series(rows, "imu2_gy"),
+                    "imu2_gz": series(rows, "imu2_gz"),
+                },
+                "IMU2 Gyro (combined logs)",
+            )
+        )
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_bmp",
+                t_s,
+                {
+                    "temp_c": series(rows, "temp_c"),
+                    "press_hpa": series(rows, "press_hpa"),
+                    "alt_m": series(rows, "alt_m"),
+                },
+                "BMP388 (combined logs)",
+            )
+        )
+        results.append(
+            save_plot(
+                out_dir,
+                f"{stem}_flow_valve",
+                t_s,
+                {
+                    "flow_hz": series(rows, "flow_hz"),
+                    "flow_lpm": series(rows, "flow_lpm"),
+                    "valve": series(rows, "valve"),
+                },
+                "Flow + Valve (combined logs)",
+            )
+        )
+        files = [p for p in results if p is not None]
+
     if not files:
-        print(f"No plottable (non-NaN) sensor data found in {log_path}")
+        print("No plottable (non-NaN) sensor data found in selected log files")
         return
 
-    print(f"Plotted {len(files)} files from {log_path}:")
+    print(f"Plotted {len(files)} files from {len(log_paths)} log file(s):")
+    for src in log_paths:
+        print(f"  source: {src}")
     for p in files:
         print(f"- {p}")
 
