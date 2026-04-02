@@ -52,6 +52,7 @@ const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
 // Valve
 const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = true;
 const float GRAVITY_MS2 = 9.80665f;
+const float DEG_TO_RAD = 0.01745329251994329577f;
 const bool FORCE_LAUNCH_DETECTED_FOR_TEST = false;
 const bool OPEN_VALVE_ON_ACCEL_FOR_TEST = false;
 const float TEST_OPEN_ACCEL_THRESHOLD_MS2 = 14.0f;
@@ -146,10 +147,14 @@ bool createNextLogFile() {
         return false;
       }
 
-      logFile.println("ms,adxl_x,adxl_y,adxl_z,imu1_ax,imu1_ay,imu1_az,imu1_gx,"
-                      "imu1_gy,imu1_gz,imu2_ax,imu2_ay,imu2_az,imu2_gx,imu2_gy,"
-                      "imu2_gz,temp_c,press_hpa,alt_m,accel_mag_ms2,flow_hz,"
-                      "flow_lpm,valve,sensor_status");
+      logFile.println(
+          "ms,adxl_x,adxl_y,adxl_z,"
+          "imu1_ax_ms2,imu1_ay_ms2,imu1_az_ms2,imu1_gx_rads,imu1_gy_rads,"
+          "imu1_gz_rads,imu1_accel_norm_g,"
+          "imu2_ax_ms2,imu2_ay_ms2,imu2_az_ms2,imu2_gx_rads,imu2_gy_rads,"
+          "imu2_gz_rads,imu2_accel_norm_g,"
+          "temp_c,press_hpa,alt_m,accel_mag_ms2,flow_hz,flow_lpm,valve,"
+          "sensor_status");
       logFile.flush();
       Serial.print("Opened ");
       Serial.println(filename);
@@ -263,15 +268,9 @@ float vectorMagnitude3(float x, float y, float z) {
   return sqrtf(x * x + y * y + z * z);
 }
 
-bool tryGetAccelMagnitudeMs2(float adxlX, float adxlY, float adxlZ,
-                             float imu1Ax, float imu1Ay, float imu1Az,
+bool tryGetAccelMagnitudeMs2(float imu1Ax, float imu1Ay, float imu1Az,
                              float imu2Ax, float imu2Ay, float imu2Az,
                              float &accelMagMs2) {
-  if (isfinite(adxlX) && isfinite(adxlY) && isfinite(adxlZ)) {
-    accelMagMs2 = vectorMagnitude3(adxlX, adxlY, adxlZ);
-    return true;
-  }
-
   float sum = 0.0f;
   int count = 0;
   if (isfinite(imu1Ax) && isfinite(imu1Ay) && isfinite(imu1Az)) {
@@ -301,8 +300,7 @@ void resetFlightDetectionState() {
   stopLoggingRequested = false;
 }
 
-void updateFlightValveLogic(unsigned long nowMs, float adxlX, float adxlY,
-                            float adxlZ, float imu1Ax, float imu1Ay,
+void updateFlightValveLogic(unsigned long nowMs, float imu1Ax, float imu1Ay,
                             float imu1Az, float imu2Ax, float imu2Ay,
                             float imu2Az) {
   if (!ENABLE_AUTO_VALVE_FLIGHT_LOGIC) {
@@ -316,8 +314,8 @@ void updateFlightValveLogic(unsigned long nowMs, float adxlX, float adxlY,
   }
 
   float accelMagMs2 = NAN;
-  if (!tryGetAccelMagnitudeMs2(adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az,
-                               imu2Ax, imu2Ay, imu2Az, accelMagMs2)) {
+  if (!tryGetAccelMagnitudeMs2(imu1Ax, imu1Ay, imu1Az, imu2Ax, imu2Ay, imu2Az,
+                               accelMagMs2)) {
     microgravityNow = false;
     setValve(false);
     return;
@@ -819,12 +817,16 @@ void handleSerialCommands() {
 }
 
 void collectAndLogRow(unsigned long nowMs) {
-  float adxlX = 0.0f, adxlY = 0.0f, adxlZ = 0.0f;
-  float imu1Ax = 0.0f, imu1Ay = 0.0f, imu1Az = 0.0f;
-  float imu1Gx = 0.0f, imu1Gy = 0.0f, imu1Gz = 0.0f;
-  float imu2Ax = 0.0f, imu2Ay = 0.0f, imu2Az = 0.0f;
-  float imu2Gx = 0.0f, imu2Gy = 0.0f, imu2Gz = 0.0f;
-  float tempC = 0.0f, pressHpa = 0.0f, altM = 0.0f, accelMagMs2 = 0.0f;
+  float adxlX = NAN, adxlY = NAN, adxlZ = NAN;
+  float imu1AxG = NAN, imu1AyG = NAN, imu1AzG = NAN;
+  float imu1AxMs2 = NAN, imu1AyMs2 = NAN, imu1AzMs2 = NAN;
+  float imu1GxRadS = NAN, imu1GyRadS = NAN, imu1GzRadS = NAN;
+  float imu1AccelNormG = NAN;
+  float imu2AxG = NAN, imu2AyG = NAN, imu2AzG = NAN;
+  float imu2AxMs2 = NAN, imu2AyMs2 = NAN, imu2AzMs2 = NAN;
+  float imu2GxRadS = NAN, imu2GyRadS = NAN, imu2GzRadS = NAN;
+  float imu2AccelNormG = NAN;
+  float tempC = NAN, pressHpa = NAN, altM = NAN, accelMagMs2 = NAN;
   uint32_t sensorStatus = 0;
 
   if (adxlOk) {
@@ -838,32 +840,46 @@ void collectAndLogRow(unsigned long nowMs) {
 
   if (imu1Ok) {
     if (imu1.accelerationAvailable()) {
-      imu1.readAcceleration(imu1Ax, imu1Ay, imu1Az);
-      imu1Ax -= imu1AxTareG;
-      imu1Ay -= imu1AyTareG;
-      imu1Az = (imu1Az - imu1AzTareG) + 1.0f;
+      imu1.readAcceleration(imu1AxG, imu1AyG, imu1AzG);
+      if (isfinite(imu1AxG) && isfinite(imu1AyG) && isfinite(imu1AzG)) {
+        imu1AxMs2 = imu1AxG * GRAVITY_MS2;
+        imu1AyMs2 = imu1AyG * GRAVITY_MS2;
+        imu1AzMs2 = imu1AzG * GRAVITY_MS2;
+        imu1AccelNormG =
+            vectorMagnitude3(imu1AxMs2, imu1AyMs2, imu1AzMs2) / GRAVITY_MS2;
+      }
     }
     if (imu1.gyroscopeAvailable()) {
-      imu1.readGyroscope(imu1Gx, imu1Gy, imu1Gz);
-      imu1Gx -= imu1GxTareDps;
-      imu1Gy -= imu1GyTareDps;
-      imu1Gz -= imu1GzTareDps;
+      float imu1GxDps = NAN, imu1GyDps = NAN, imu1GzDps = NAN;
+      imu1.readGyroscope(imu1GxDps, imu1GyDps, imu1GzDps);
+      if (isfinite(imu1GxDps) && isfinite(imu1GyDps) && isfinite(imu1GzDps)) {
+        imu1GxRadS = (imu1GxDps - imu1GxTareDps) * DEG_TO_RAD;
+        imu1GyRadS = (imu1GyDps - imu1GyTareDps) * DEG_TO_RAD;
+        imu1GzRadS = (imu1GzDps - imu1GzTareDps) * DEG_TO_RAD;
+      }
     }
     sensorStatus |= (1u << 1);
   }
 
   if (imu2Ok) {
     if (imu2.accelerationAvailable()) {
-      imu2.readAcceleration(imu2Ax, imu2Ay, imu2Az);
-      imu2Ax -= imu2AxTareG;
-      imu2Ay -= imu2AyTareG;
-      imu2Az = (imu2Az - imu2AzTareG) + 1.0f;
+      imu2.readAcceleration(imu2AxG, imu2AyG, imu2AzG);
+      if (isfinite(imu2AxG) && isfinite(imu2AyG) && isfinite(imu2AzG)) {
+        imu2AxMs2 = imu2AxG * GRAVITY_MS2;
+        imu2AyMs2 = imu2AyG * GRAVITY_MS2;
+        imu2AzMs2 = imu2AzG * GRAVITY_MS2;
+        imu2AccelNormG =
+            vectorMagnitude3(imu2AxMs2, imu2AyMs2, imu2AzMs2) / GRAVITY_MS2;
+      }
     }
     if (imu2.gyroscopeAvailable()) {
-      imu2.readGyroscope(imu2Gx, imu2Gy, imu2Gz);
-      imu2Gx -= imu2GxTareDps;
-      imu2Gy -= imu2GyTareDps;
-      imu2Gz -= imu2GzTareDps;
+      float imu2GxDps = NAN, imu2GyDps = NAN, imu2GzDps = NAN;
+      imu2.readGyroscope(imu2GxDps, imu2GyDps, imu2GzDps);
+      if (isfinite(imu2GxDps) && isfinite(imu2GyDps) && isfinite(imu2GzDps)) {
+        imu2GxRadS = (imu2GxDps - imu2GxTareDps) * DEG_TO_RAD;
+        imu2GyRadS = (imu2GyDps - imu2GyTareDps) * DEG_TO_RAD;
+        imu2GzRadS = (imu2GzDps - imu2GzTareDps) * DEG_TO_RAD;
+      }
     }
     sensorStatus |= (1u << 2);
   }
@@ -882,11 +898,11 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 5);
   }
 
-  tryGetAccelMagnitudeMs2(adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az, imu2Ax,
-                          imu2Ay, imu2Az, accelMagMs2);
+  tryGetAccelMagnitudeMs2(imu1AxG, imu1AyG, imu1AzG, imu2AxG, imu2AyG, imu2AzG,
+                          accelMagMs2);
 
-  updateFlightValveLogic(nowMs, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az,
-                         imu2Ax, imu2Ay, imu2Az);
+  updateFlightValveLogic(nowMs, imu1AxG, imu1AyG, imu1AzG, imu2AxG, imu2AyG,
+                         imu2AzG);
 
   if (valveOpen) {
     sensorStatus |= (1u << 6);
@@ -898,12 +914,14 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 8);
   }
 
-  logFile.printf("%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%."
-                 "4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
-                 nowMs, adxlX, adxlY, adxlZ, imu1Ax, imu1Ay, imu1Az, imu1Gx,
-                 imu1Gy, imu1Gz, imu2Ax, imu2Ay, imu2Az, imu2Gx, imu2Gy, imu2Gz,
-                 tempC, pressHpa, altM, accelMagMs2, flowHz, flowLpm,
-                 valveOpen ? 1u : 0u, (unsigned long)sensorStatus);
+  logFile.printf(
+      "%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,"
+      "%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
+      nowMs, adxlX, adxlY, adxlZ, imu1AxMs2, imu1AyMs2, imu1AzMs2, imu1GxRadS,
+      imu1GyRadS, imu1GzRadS, imu1AccelNormG, imu2AxMs2, imu2AyMs2, imu2AzMs2,
+      imu2GxRadS, imu2GyRadS, imu2GzRadS, imu2AccelNormG, tempC, pressHpa, altM,
+      accelMagMs2, flowHz, flowLpm, valveOpen ? 1u : 0u,
+      (unsigned long)sensorStatus);
 }
 
 void setup() {
