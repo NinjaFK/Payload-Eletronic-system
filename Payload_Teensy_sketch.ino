@@ -5,9 +5,9 @@
 // Sensors
 #include <Adafruit_ADXL375.h>
 #include <Adafruit_BMP3XX.h>
+#include <Adafruit_LSM6DSO32.h>
 #include <Adafruit_MPR121.h>
 #include <Adafruit_Sensor.h>
-#include <Arduino_LSM6DSOX.h>
 
 // RF
 #include <LoRa.h>
@@ -52,7 +52,6 @@ const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
 // Valve
 const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = true;
 const float GRAVITY_MS2 = 9.80665f;
-const float DEG_TO_RAD = 0.01745329251994329577f;
 const bool FORCE_LAUNCH_DETECTED_FOR_TEST = false;
 const bool OPEN_VALVE_ON_ACCEL_FOR_TEST = false;
 const float TEST_OPEN_ACCEL_THRESHOLD_MS2 = 14.0f;
@@ -60,7 +59,7 @@ const unsigned long TEST_OPEN_CONFIRM_MS = 60;
 const float LAUNCH_ACCEL_THRESHOLD_MS2 = 50.0f; // ~1.3 g
 const unsigned long LAUNCH_CONFIRM_MS = 120;
 const float MICROGRAVITY_ENTER_MAX_MS2 = 8.8f; // enter microgravity
-const float MICROGRAVITY_EXIT_MIN_MS2 = 3.0f;   // exit microgravity
+const float MICROGRAVITY_EXIT_MIN_MS2 = 3.0f;  // exit microgravity
 const unsigned long MICROGRAVITY_CONFIRM_MS = 200;
 const float ACCEL_MAG_FILTER_ALPHA = 0.15f;
 const unsigned long FLIGHT_LOGIC_ARM_DELAY_MS = 300;
@@ -80,8 +79,8 @@ FsFile logFile;
 Adafruit_ADXL375 accel(12345, &Wire); // I2C mode
 Adafruit_BMP3XX bmp;
 Adafruit_MPR121 cap;
-LSM6DSOXClass imu1(Wire, LSM6DSO32_ADDR_1);
-LSM6DSOXClass imu2(Wire, LSM6DSO32_ADDR_2);
+Adafruit_LSM6DSO32 imu1;
+Adafruit_LSM6DSO32 imu2;
 
 // Runtime state
 bool systemPowered = false;
@@ -118,18 +117,18 @@ bool stopLoggingRequested = false;
 float adxlXTareMs2 = 0.0f;
 float adxlYTareMs2 = 0.0f;
 float adxlZTareMs2 = 0.0f;
-float imu1AxTareG = 0.0f;
-float imu1AyTareG = 0.0f;
-float imu1AzTareG = 0.0f;
-float imu1GxTareDps = 0.0f;
-float imu1GyTareDps = 0.0f;
-float imu1GzTareDps = 0.0f;
-float imu2AxTareG = 0.0f;
-float imu2AyTareG = 0.0f;
-float imu2AzTareG = 0.0f;
-float imu2GxTareDps = 0.0f;
-float imu2GyTareDps = 0.0f;
-float imu2GzTareDps = 0.0f;
+float imu1AxTareMs2 = 0.0f;
+float imu1AyTareMs2 = 0.0f;
+float imu1AzTareMs2 = 0.0f;
+float imu1GxTareRadS = 0.0f;
+float imu1GyTareRadS = 0.0f;
+float imu1GzTareRadS = 0.0f;
+float imu2AxTareMs2 = 0.0f;
+float imu2AyTareMs2 = 0.0f;
+float imu2AzTareMs2 = 0.0f;
+float imu2GxTareRadS = 0.0f;
+float imu2GyTareRadS = 0.0f;
+float imu2GzTareRadS = 0.0f;
 float bmpTempTareC = 0.0f;
 float bmpPressTareHpa = 0.0f;
 float bmpAltTareM = 0.0f;
@@ -268,17 +267,17 @@ float vectorMagnitude3(float x, float y, float z) {
   return sqrtf(x * x + y * y + z * z);
 }
 
-bool tryGetAccelMagnitudeMs2(float imu1Ax, float imu1Ay, float imu1Az,
-                             float imu2Ax, float imu2Ay, float imu2Az,
+bool tryGetAccelMagnitudeMs2(float imu1AxMs2, float imu1AyMs2, float imu1AzMs2,
+                             float imu2AxMs2, float imu2AyMs2, float imu2AzMs2,
                              float &accelMagMs2) {
   float sum = 0.0f;
   int count = 0;
-  if (isfinite(imu1Ax) && isfinite(imu1Ay) && isfinite(imu1Az)) {
-    sum += vectorMagnitude3(imu1Ax, imu1Ay, imu1Az) * GRAVITY_MS2;
+  if (isfinite(imu1AxMs2) && isfinite(imu1AyMs2) && isfinite(imu1AzMs2)) {
+    sum += vectorMagnitude3(imu1AxMs2, imu1AyMs2, imu1AzMs2);
     count++;
   }
-  if (isfinite(imu2Ax) && isfinite(imu2Ay) && isfinite(imu2Az)) {
-    sum += vectorMagnitude3(imu2Ax, imu2Ay, imu2Az) * GRAVITY_MS2;
+  if (isfinite(imu2AxMs2) && isfinite(imu2AyMs2) && isfinite(imu2AzMs2)) {
+    sum += vectorMagnitude3(imu2AxMs2, imu2AyMs2, imu2AzMs2);
     count++;
   }
   if (count == 0) {
@@ -300,9 +299,9 @@ void resetFlightDetectionState() {
   stopLoggingRequested = false;
 }
 
-void updateFlightValveLogic(unsigned long nowMs, float imu1Ax, float imu1Ay,
-                            float imu1Az, float imu2Ax, float imu2Ay,
-                            float imu2Az) {
+void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
+                            float imu1AyMs2, float imu1AzMs2, float imu2AxMs2,
+                            float imu2AyMs2, float imu2AzMs2) {
   if (!ENABLE_AUTO_VALVE_FLIGHT_LOGIC) {
     return;
   }
@@ -314,8 +313,8 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1Ax, float imu1Ay,
   }
 
   float accelMagMs2 = NAN;
-  if (!tryGetAccelMagnitudeMs2(imu1Ax, imu1Ay, imu1Az, imu2Ax, imu2Ay, imu2Az,
-                               accelMagMs2)) {
+  if (!tryGetAccelMagnitudeMs2(imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2,
+                               imu2AyMs2, imu2AzMs2, accelMagMs2)) {
     microgravityNow = false;
     setValve(false);
     return;
@@ -446,15 +445,23 @@ void initSensors() {
 
   flowOk = ENABLE_FLOW_SENSOR;
 
-  if (imu1.begin()) {
+  if (imu1.begin_I2C(LSM6DSO32_ADDR_1, &Wire)) {
     imu1Ok = true;
+    imu1.setAccelRange(LSM6DSO32_ACCEL_RANGE_8_G);
+    imu1.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
+    imu1.setAccelDataRate(LSM6DS_RATE_104_HZ);
+    imu1.setGyroDataRate(LSM6DS_RATE_104_HZ);
     Serial.println("LSM6DSO32 #1 detected at 0x6A");
   } else {
     Serial.println("LSM6DSO32 #1 not detected at 0x6A");
   }
 
-  if (imu2.begin()) {
+  if (imu2.begin_I2C(LSM6DSO32_ADDR_2, &Wire)) {
     imu2Ok = true;
+    imu2.setAccelRange(LSM6DSO32_ACCEL_RANGE_8_G);
+    imu2.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
+    imu2.setAccelDataRate(LSM6DS_RATE_104_HZ);
+    imu2.setGyroDataRate(LSM6DS_RATE_104_HZ);
     Serial.println("LSM6DSO32 #2 detected at 0x6B");
   } else {
     Serial.println("LSM6DSO32 #2 not detected at 0x6B");
@@ -483,18 +490,18 @@ void calibrateSensorTares() {
   adxlXTareMs2 = 0.0f;
   adxlYTareMs2 = 0.0f;
   adxlZTareMs2 = 0.0f;
-  imu1AxTareG = 0.0f;
-  imu1AyTareG = 0.0f;
-  imu1AzTareG = 0.0f;
-  imu1GxTareDps = 0.0f;
-  imu1GyTareDps = 0.0f;
-  imu1GzTareDps = 0.0f;
-  imu2AxTareG = 0.0f;
-  imu2AyTareG = 0.0f;
-  imu2AzTareG = 0.0f;
-  imu2GxTareDps = 0.0f;
-  imu2GyTareDps = 0.0f;
-  imu2GzTareDps = 0.0f;
+  imu1AxTareMs2 = 0.0f;
+  imu1AyTareMs2 = 0.0f;
+  imu1AzTareMs2 = 0.0f;
+  imu1GxTareRadS = 0.0f;
+  imu1GyTareRadS = 0.0f;
+  imu1GzTareRadS = 0.0f;
+  imu2AxTareMs2 = 0.0f;
+  imu2AyTareMs2 = 0.0f;
+  imu2AzTareMs2 = 0.0f;
+  imu2GxTareRadS = 0.0f;
+  imu2GyTareRadS = 0.0f;
+  imu2GzTareRadS = 0.0f;
   bmpTempTareC = 0.0f;
   bmpPressTareHpa = 0.0f;
   bmpAltTareM = 0.0f;
@@ -529,50 +536,48 @@ void calibrateSensorTares() {
     }
 
     if (imu1Ok) {
-      float ax = 0.0f, ay = 0.0f, az = 0.0f;
-      if (imu1.accelerationAvailable()) {
-        imu1.readAcceleration(ax, ay, az);
-        if (isfinite(ax) && isfinite(ay) && isfinite(az)) {
-          imu1AxSum += ax;
-          imu1AySum += ay;
-          imu1AzSum += az;
-          imu1AccCount++;
-        }
-      }
+      sensors_event_t imu1AccelEvent;
+      sensors_event_t imu1GyroEvent;
+      sensors_event_t imu1TempEvent;
+      imu1.getEvent(&imu1AccelEvent, &imu1GyroEvent, &imu1TempEvent);
 
-      float gx = 0.0f, gy = 0.0f, gz = 0.0f;
-      if (imu1.gyroscopeAvailable()) {
-        imu1.readGyroscope(gx, gy, gz);
-        if (isfinite(gx) && isfinite(gy) && isfinite(gz)) {
-          imu1GxSum += gx;
-          imu1GySum += gy;
-          imu1GzSum += gz;
-          imu1GyroCount++;
-        }
+      if (isfinite(imu1AccelEvent.acceleration.x) &&
+          isfinite(imu1AccelEvent.acceleration.y) &&
+          isfinite(imu1AccelEvent.acceleration.z)) {
+        imu1AxSum += imu1AccelEvent.acceleration.x;
+        imu1AySum += imu1AccelEvent.acceleration.y;
+        imu1AzSum += imu1AccelEvent.acceleration.z;
+        imu1AccCount++;
+      }
+      if (isfinite(imu1GyroEvent.gyro.x) && isfinite(imu1GyroEvent.gyro.y) &&
+          isfinite(imu1GyroEvent.gyro.z)) {
+        imu1GxSum += imu1GyroEvent.gyro.x;
+        imu1GySum += imu1GyroEvent.gyro.y;
+        imu1GzSum += imu1GyroEvent.gyro.z;
+        imu1GyroCount++;
       }
     }
 
     if (imu2Ok) {
-      float ax = 0.0f, ay = 0.0f, az = 0.0f;
-      if (imu2.accelerationAvailable()) {
-        imu2.readAcceleration(ax, ay, az);
-        if (isfinite(ax) && isfinite(ay) && isfinite(az)) {
-          imu2AxSum += ax;
-          imu2AySum += ay;
-          imu2AzSum += az;
-          imu2AccCount++;
-        }
-      }
+      sensors_event_t imu2AccelEvent;
+      sensors_event_t imu2GyroEvent;
+      sensors_event_t imu2TempEvent;
+      imu2.getEvent(&imu2AccelEvent, &imu2GyroEvent, &imu2TempEvent);
 
-      float gx = 0.0f, gy = 0.0f, gz = 0.0f;
-      if (imu2.gyroscopeAvailable()) {
-        imu2.readGyroscope(gx, gy, gz);
-        if (isfinite(gx) && isfinite(gy) && isfinite(gz)) {
-          imu2GxSum += gx;
-          imu2GySum += gy;
-          imu2GzSum += gz;
-          imu2GyroCount++;
-        }
+      if (isfinite(imu2AccelEvent.acceleration.x) &&
+          isfinite(imu2AccelEvent.acceleration.y) &&
+          isfinite(imu2AccelEvent.acceleration.z)) {
+        imu2AxSum += imu2AccelEvent.acceleration.x;
+        imu2AySum += imu2AccelEvent.acceleration.y;
+        imu2AzSum += imu2AccelEvent.acceleration.z;
+        imu2AccCount++;
+      }
+      if (isfinite(imu2GyroEvent.gyro.x) && isfinite(imu2GyroEvent.gyro.y) &&
+          isfinite(imu2GyroEvent.gyro.z)) {
+        imu2GxSum += imu2GyroEvent.gyro.x;
+        imu2GySum += imu2GyroEvent.gyro.y;
+        imu2GzSum += imu2GyroEvent.gyro.z;
+        imu2GyroCount++;
       }
     }
 
@@ -597,24 +602,24 @@ void calibrateSensorTares() {
     adxlZTareMs2 = adxlZSum / (float)adxlCount;
   }
   if (imu1AccCount > 0) {
-    imu1AxTareG = imu1AxSum / (float)imu1AccCount;
-    imu1AyTareG = imu1AySum / (float)imu1AccCount;
-    imu1AzTareG = imu1AzSum / (float)imu1AccCount;
+    imu1AxTareMs2 = imu1AxSum / (float)imu1AccCount;
+    imu1AyTareMs2 = imu1AySum / (float)imu1AccCount;
+    imu1AzTareMs2 = imu1AzSum / (float)imu1AccCount;
   }
   if (imu1GyroCount > 0) {
-    imu1GxTareDps = imu1GxSum / (float)imu1GyroCount;
-    imu1GyTareDps = imu1GySum / (float)imu1GyroCount;
-    imu1GzTareDps = imu1GzSum / (float)imu1GyroCount;
+    imu1GxTareRadS = imu1GxSum / (float)imu1GyroCount;
+    imu1GyTareRadS = imu1GySum / (float)imu1GyroCount;
+    imu1GzTareRadS = imu1GzSum / (float)imu1GyroCount;
   }
   if (imu2AccCount > 0) {
-    imu2AxTareG = imu2AxSum / (float)imu2AccCount;
-    imu2AyTareG = imu2AySum / (float)imu2AccCount;
-    imu2AzTareG = imu2AzSum / (float)imu2AccCount;
+    imu2AxTareMs2 = imu2AxSum / (float)imu2AccCount;
+    imu2AyTareMs2 = imu2AySum / (float)imu2AccCount;
+    imu2AzTareMs2 = imu2AzSum / (float)imu2AccCount;
   }
   if (imu2GyroCount > 0) {
-    imu2GxTareDps = imu2GxSum / (float)imu2GyroCount;
-    imu2GyTareDps = imu2GySum / (float)imu2GyroCount;
-    imu2GzTareDps = imu2GzSum / (float)imu2GyroCount;
+    imu2GxTareRadS = imu2GxSum / (float)imu2GyroCount;
+    imu2GyTareRadS = imu2GySum / (float)imu2GyroCount;
+    imu2GzTareRadS = imu2GzSum / (float)imu2GyroCount;
   }
   if (bmpCount > 0) {
     bmpTempTareC = bmpTempSum / (float)bmpCount;
@@ -628,30 +633,30 @@ void calibrateSensorTares() {
   Serial.println(adxlYTareMs2, 4);
   Serial.print("ADXL Z tare (m/s^2): ");
   Serial.println(adxlZTareMs2, 4);
-  Serial.print("IMU1 accel tare (g): ");
-  Serial.print(imu1AxTareG, 4);
+  Serial.print("IMU1 accel tare (m/s^2): ");
+  Serial.print(imu1AxTareMs2, 4);
   Serial.print(", ");
-  Serial.print(imu1AyTareG, 4);
+  Serial.print(imu1AyTareMs2, 4);
   Serial.print(", ");
-  Serial.println(imu1AzTareG, 4);
-  Serial.print("IMU1 gyro tare (dps): ");
-  Serial.print(imu1GxTareDps, 4);
+  Serial.println(imu1AzTareMs2, 4);
+  Serial.print("IMU1 gyro tare (rad/s): ");
+  Serial.print(imu1GxTareRadS, 4);
   Serial.print(", ");
-  Serial.print(imu1GyTareDps, 4);
+  Serial.print(imu1GyTareRadS, 4);
   Serial.print(", ");
-  Serial.println(imu1GzTareDps, 4);
-  Serial.print("IMU2 accel tare (g): ");
-  Serial.print(imu2AxTareG, 4);
+  Serial.println(imu1GzTareRadS, 4);
+  Serial.print("IMU2 accel tare (m/s^2): ");
+  Serial.print(imu2AxTareMs2, 4);
   Serial.print(", ");
-  Serial.print(imu2AyTareG, 4);
+  Serial.print(imu2AyTareMs2, 4);
   Serial.print(", ");
-  Serial.println(imu2AzTareG, 4);
-  Serial.print("IMU2 gyro tare (dps): ");
-  Serial.print(imu2GxTareDps, 4);
+  Serial.println(imu2AzTareMs2, 4);
+  Serial.print("IMU2 gyro tare (rad/s): ");
+  Serial.print(imu2GxTareRadS, 4);
   Serial.print(", ");
-  Serial.print(imu2GyTareDps, 4);
+  Serial.print(imu2GyTareRadS, 4);
   Serial.print(", ");
-  Serial.println(imu2GzTareDps, 4);
+  Serial.println(imu2GzTareRadS, 4);
   Serial.print("BMP tare (C,hPa,m): ");
   Serial.print(bmpTempTareC, 4);
   Serial.print(", ");
@@ -818,11 +823,9 @@ void handleSerialCommands() {
 
 void collectAndLogRow(unsigned long nowMs) {
   float adxlX = NAN, adxlY = NAN, adxlZ = NAN;
-  float imu1AxG = NAN, imu1AyG = NAN, imu1AzG = NAN;
   float imu1AxMs2 = NAN, imu1AyMs2 = NAN, imu1AzMs2 = NAN;
   float imu1GxRadS = NAN, imu1GyRadS = NAN, imu1GzRadS = NAN;
   float imu1AccelNormG = NAN;
-  float imu2AxG = NAN, imu2AyG = NAN, imu2AzG = NAN;
   float imu2AxMs2 = NAN, imu2AyMs2 = NAN, imu2AzMs2 = NAN;
   float imu2GxRadS = NAN, imu2GyRadS = NAN, imu2GzRadS = NAN;
   float imu2AccelNormG = NAN;
@@ -839,47 +842,49 @@ void collectAndLogRow(unsigned long nowMs) {
   }
 
   if (imu1Ok) {
-    if (imu1.accelerationAvailable()) {
-      imu1.readAcceleration(imu1AxG, imu1AyG, imu1AzG);
-      if (isfinite(imu1AxG) && isfinite(imu1AyG) && isfinite(imu1AzG)) {
-        imu1AxMs2 = imu1AxG * GRAVITY_MS2;
-        imu1AyMs2 = imu1AyG * GRAVITY_MS2;
-        imu1AzMs2 = imu1AzG * GRAVITY_MS2;
-        imu1AccelNormG =
-            vectorMagnitude3(imu1AxMs2, imu1AyMs2, imu1AzMs2) / GRAVITY_MS2;
-      }
+    sensors_event_t imu1AccelEvent;
+    sensors_event_t imu1GyroEvent;
+    sensors_event_t imu1TempEvent;
+    imu1.getEvent(&imu1AccelEvent, &imu1GyroEvent, &imu1TempEvent);
+
+    if (isfinite(imu1AccelEvent.acceleration.x) &&
+        isfinite(imu1AccelEvent.acceleration.y) &&
+        isfinite(imu1AccelEvent.acceleration.z)) {
+      imu1AxMs2 = imu1AccelEvent.acceleration.x;
+      imu1AyMs2 = imu1AccelEvent.acceleration.y;
+      imu1AzMs2 = imu1AccelEvent.acceleration.z;
+      imu1AccelNormG =
+          vectorMagnitude3(imu1AxMs2, imu1AyMs2, imu1AzMs2) / GRAVITY_MS2;
     }
-    if (imu1.gyroscopeAvailable()) {
-      float imu1GxDps = NAN, imu1GyDps = NAN, imu1GzDps = NAN;
-      imu1.readGyroscope(imu1GxDps, imu1GyDps, imu1GzDps);
-      if (isfinite(imu1GxDps) && isfinite(imu1GyDps) && isfinite(imu1GzDps)) {
-        imu1GxRadS = (imu1GxDps - imu1GxTareDps) * DEG_TO_RAD;
-        imu1GyRadS = (imu1GyDps - imu1GyTareDps) * DEG_TO_RAD;
-        imu1GzRadS = (imu1GzDps - imu1GzTareDps) * DEG_TO_RAD;
-      }
+    if (isfinite(imu1GyroEvent.gyro.x) && isfinite(imu1GyroEvent.gyro.y) &&
+        isfinite(imu1GyroEvent.gyro.z)) {
+      imu1GxRadS = imu1GyroEvent.gyro.x - imu1GxTareRadS;
+      imu1GyRadS = imu1GyroEvent.gyro.y - imu1GyTareRadS;
+      imu1GzRadS = imu1GyroEvent.gyro.z - imu1GzTareRadS;
     }
     sensorStatus |= (1u << 1);
   }
 
   if (imu2Ok) {
-    if (imu2.accelerationAvailable()) {
-      imu2.readAcceleration(imu2AxG, imu2AyG, imu2AzG);
-      if (isfinite(imu2AxG) && isfinite(imu2AyG) && isfinite(imu2AzG)) {
-        imu2AxMs2 = imu2AxG * GRAVITY_MS2;
-        imu2AyMs2 = imu2AyG * GRAVITY_MS2;
-        imu2AzMs2 = imu2AzG * GRAVITY_MS2;
-        imu2AccelNormG =
-            vectorMagnitude3(imu2AxMs2, imu2AyMs2, imu2AzMs2) / GRAVITY_MS2;
-      }
+    sensors_event_t imu2AccelEvent;
+    sensors_event_t imu2GyroEvent;
+    sensors_event_t imu2TempEvent;
+    imu2.getEvent(&imu2AccelEvent, &imu2GyroEvent, &imu2TempEvent);
+
+    if (isfinite(imu2AccelEvent.acceleration.x) &&
+        isfinite(imu2AccelEvent.acceleration.y) &&
+        isfinite(imu2AccelEvent.acceleration.z)) {
+      imu2AxMs2 = imu2AccelEvent.acceleration.x;
+      imu2AyMs2 = imu2AccelEvent.acceleration.y;
+      imu2AzMs2 = imu2AccelEvent.acceleration.z;
+      imu2AccelNormG =
+          vectorMagnitude3(imu2AxMs2, imu2AyMs2, imu2AzMs2) / GRAVITY_MS2;
     }
-    if (imu2.gyroscopeAvailable()) {
-      float imu2GxDps = NAN, imu2GyDps = NAN, imu2GzDps = NAN;
-      imu2.readGyroscope(imu2GxDps, imu2GyDps, imu2GzDps);
-      if (isfinite(imu2GxDps) && isfinite(imu2GyDps) && isfinite(imu2GzDps)) {
-        imu2GxRadS = (imu2GxDps - imu2GxTareDps) * DEG_TO_RAD;
-        imu2GyRadS = (imu2GyDps - imu2GyTareDps) * DEG_TO_RAD;
-        imu2GzRadS = (imu2GzDps - imu2GzTareDps) * DEG_TO_RAD;
-      }
+    if (isfinite(imu2GyroEvent.gyro.x) && isfinite(imu2GyroEvent.gyro.y) &&
+        isfinite(imu2GyroEvent.gyro.z)) {
+      imu2GxRadS = imu2GyroEvent.gyro.x - imu2GxTareRadS;
+      imu2GyRadS = imu2GyroEvent.gyro.y - imu2GyTareRadS;
+      imu2GzRadS = imu2GyroEvent.gyro.z - imu2GzTareRadS;
     }
     sensorStatus |= (1u << 2);
   }
@@ -898,11 +903,11 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 5);
   }
 
-  tryGetAccelMagnitudeMs2(imu1AxG, imu1AyG, imu1AzG, imu2AxG, imu2AyG, imu2AzG,
-                          accelMagMs2);
+  tryGetAccelMagnitudeMs2(imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2, imu2AyMs2,
+                          imu2AzMs2, accelMagMs2);
 
-  updateFlightValveLogic(nowMs, imu1AxG, imu1AyG, imu1AzG, imu2AxG, imu2AyG,
-                         imu2AzG);
+  updateFlightValveLogic(nowMs, imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2,
+                         imu2AyMs2, imu2AzMs2);
 
   if (valveOpen) {
     sensorStatus |= (1u << 6);

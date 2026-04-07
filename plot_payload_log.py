@@ -52,6 +52,14 @@ def series(rows, key):
     return [to_float(r.get(key, "")) for r in rows]
 
 
+def series_any(rows, keys):
+    for key in keys:
+        values = series(rows, key)
+        if has_real(values):
+            return values
+    return [math.nan] * len(rows)
+
+
 def has_real(values):
     return any(not math.isnan(v) for v in values)
 
@@ -102,9 +110,9 @@ def plot_file(log_path: Path, out_dir: Path):
             f"{stem}_imu1_accel",
             t_s,
             {
-                "imu1_ax": series(rows, "imu1_ax"),
-                "imu1_ay": series(rows, "imu1_ay"),
-                "imu1_az": series(rows, "imu1_az"),
+                "imu1_ax": series_any(rows, ["imu1_ax_ms2", "imu1_ax"]),
+                "imu1_ay": series_any(rows, ["imu1_ay_ms2", "imu1_ay"]),
+                "imu1_az": series_any(rows, ["imu1_az_ms2", "imu1_az"]),
             },
             "IMU1 Accel",
         )
@@ -115,9 +123,9 @@ def plot_file(log_path: Path, out_dir: Path):
             f"{stem}_imu1_gyro",
             t_s,
             {
-                "imu1_gx": series(rows, "imu1_gx"),
-                "imu1_gy": series(rows, "imu1_gy"),
-                "imu1_gz": series(rows, "imu1_gz"),
+                "imu1_gx": series_any(rows, ["imu1_gx_rads", "imu1_gx"]),
+                "imu1_gy": series_any(rows, ["imu1_gy_rads", "imu1_gy"]),
+                "imu1_gz": series_any(rows, ["imu1_gz_rads", "imu1_gz"]),
             },
             "IMU1 Gyro",
         )
@@ -128,9 +136,9 @@ def plot_file(log_path: Path, out_dir: Path):
             f"{stem}_imu2_accel",
             t_s,
             {
-                "imu2_ax": series(rows, "imu2_ax"),
-                "imu2_ay": series(rows, "imu2_ay"),
-                "imu2_az": series(rows, "imu2_az"),
+                "imu2_ax": series_any(rows, ["imu2_ax_ms2", "imu2_ax"]),
+                "imu2_ay": series_any(rows, ["imu2_ay_ms2", "imu2_ay"]),
+                "imu2_az": series_any(rows, ["imu2_az_ms2", "imu2_az"]),
             },
             "IMU2 Accel",
         )
@@ -141,9 +149,9 @@ def plot_file(log_path: Path, out_dir: Path):
             f"{stem}_imu2_gyro",
             t_s,
             {
-                "imu2_gx": series(rows, "imu2_gx"),
-                "imu2_gy": series(rows, "imu2_gy"),
-                "imu2_gz": series(rows, "imu2_gz"),
+                "imu2_gx": series_any(rows, ["imu2_gx_rads", "imu2_gx"]),
+                "imu2_gy": series_any(rows, ["imu2_gy_rads", "imu2_gy"]),
+                "imu2_gz": series_any(rows, ["imu2_gz_rads", "imu2_gz"]),
             },
             "IMU2 Gyro",
         )
@@ -256,9 +264,9 @@ def main():
                 f"{stem}_imu1_accel",
                 t_s,
                 {
-                    "imu1_ax": series(rows, "imu1_ax"),
-                    "imu1_ay": series(rows, "imu1_ay"),
-                    "imu1_az": series(rows, "imu1_az"),
+                    "imu1_ax": series_any(rows, ["imu1_ax_ms2", "imu1_ax"]),
+                    "imu1_ay": series_any(rows, ["imu1_ay_ms2", "imu1_ay"]),
+                    "imu1_az": series_any(rows, ["imu1_az_ms2", "imu1_az"]),
                 },
                 "IMU1 Accel (combined logs)",
             )
@@ -269,9 +277,9 @@ def main():
                 f"{stem}_imu1_gyro",
                 t_s,
                 {
-                    "imu1_gx": series(rows, "imu1_gx"),
-                    "imu1_gy": series(rows, "imu1_gy"),
-                    "imu1_gz": series(rows, "imu1_gz"),
+                    "imu1_gx": series_any(rows, ["imu1_gx_rads", "imu1_gx"]),
+                    "imu1_gy": series_any(rows, ["imu1_gy_rads", "imu1_gy"]),
+                    "imu1_gz": series_any(rows, ["imu1_gz_rads", "imu1_gz"]),
                 },
                 "IMU1 Gyro (combined logs)",
             )
@@ -282,9 +290,9 @@ def main():
                 f"{stem}_imu2_accel",
                 t_s,
                 {
-                    "imu2_ax": series(rows, "imu2_ax"),
-                    "imu2_ay": series(rows, "imu2_ay"),
-                    "imu2_az": series(rows, "imu2_az"),
+                    "imu2_ax": series_any(rows, ["imu2_ax_ms2", "imu2_ax"]),
+                    "imu2_ay": series_any(rows, ["imu2_ay_ms2", "imu2_ay"]),
+                    "imu2_az": series_any(rows, ["imu2_az_ms2", "imu2_az"]),
                 },
                 "IMU2 Accel (combined logs)",
             )
@@ -295,9 +303,9 @@ def main():
                 f"{stem}_imu2_gyro",
                 t_s,
                 {
-                    "imu2_gx": series(rows, "imu2_gx"),
-                    "imu2_gy": series(rows, "imu2_gy"),
-                    "imu2_gz": series(rows, "imu2_gz"),
+                    "imu2_gx": series_any(rows, ["imu2_gx_rads", "imu2_gx"]),
+                    "imu2_gy": series_any(rows, ["imu2_gy_rads", "imu2_gy"]),
+                    "imu2_gz": series_any(rows, ["imu2_gz_rads", "imu2_gz"]),
                 },
                 "IMU2 Gyro (combined logs)",
             )
