@@ -133,8 +133,22 @@ float bmpTempTareC = 0.0f;
 float bmpPressTareHpa = 0.0f;
 float bmpAltTareM = 0.0f;
 
+/**
+ * @brief Flow sensor interrupt service routine.
+ *
+ * Increments the shared pulse counter on each detected flow pulse.
+ */
 void flowPulseISR() { flowPulseCount++; }
 
+/**
+ * @brief Create and open the next available rotating CSV log file.
+ *
+ * Scans for the first free filename in the form `logNNN.csv`, opens it, and
+ * writes the CSV header row.
+ *
+ * @return true if a new log file was created and opened successfully.
+ * @return false if no file could be created/opened.
+ */
 bool createNextLogFile() {
   char filename[16];
 
@@ -164,6 +178,12 @@ bool createNextLogFile() {
   return false;
 }
 
+/**
+ * @brief Enable sensor power rail.
+ *
+ * Turns on the switched sensor rail when enabled, or marks the system powered
+ * in debug bypass mode.
+ */
 void powerSensorsOn() {
   if (!USE_SENSOR_POWER_SWITCH) {
     systemPowered = true;
@@ -181,6 +201,12 @@ void powerSensorsOn() {
   Serial.println("Sensor rail ON");
 }
 
+/**
+ * @brief Disable sensor power rail.
+ *
+ * Turns off the switched sensor rail when enabled. In debug bypass mode this
+ * only updates software state.
+ */
 void powerSensorsOff() {
   if (!USE_SENSOR_POWER_SWITCH) {
     systemPowered = false;
@@ -196,6 +222,14 @@ void powerSensorsOff() {
   Serial.println("Sensor rail OFF");
 }
 
+/**
+ * @brief Command valve open/closed state.
+ *
+ * Applies the requested valve state to the control pin using configured active
+ * polarity and updates valve state bookkeeping.
+ *
+ * @param open `true` to command valve open, `false` to command valve closed.
+ */
 void setValve(bool open) {
   if (!ENABLE_VALVE_CONTROL) {
     valveOpen = false;
@@ -224,17 +258,28 @@ void setValve(bool open) {
   }
 }
 
+/**
+ * @brief Update computed flow metrics from ISR pulse counts.
+ *
+ * Every `FLOW_UPDATE_MS`, atomically snapshots pulse count, computes flow
+ * frequency in Hz and flow rate in liters/minute, then resets the counter.
+ *
+ * @param nowMs Current `millis()` timestamp.
+ */
 void updateFlowStats(unsigned long nowMs) {
+  // Behavior: flow sensor disabled -> publish zero flow values and exit.
   if (!ENABLE_FLOW_SENSOR) {
     flowHz = 0.0f;
     flowLpm = 0.0f;
     return;
   }
 
+  // Behavior: wait until next configured flow integration window.
   if (nowMs - lastFlowUpdateMs < FLOW_UPDATE_MS) {
     return;
   }
 
+  // Behavior: atomically snapshot and clear ISR-updated pulse count.
   uint32_t pulses = 0;
   noInterrupts();
   pulses = flowPulseCount;
@@ -242,15 +287,30 @@ void updateFlowStats(unsigned long nowMs) {
   interrupts();
 
   unsigned long elapsedMs = nowMs - lastFlowUpdateMs;
+  // Behavior: guard divide-by-zero if timestamps happen to match.
   if (elapsedMs == 0) {
     return;
   }
 
+  // Behavior: convert pulse frequency to flow engineering units.
   flowHz = (1000.0f * pulses) / (float)elapsedMs;
   flowLpm = (flowHz * 60.0f) / FLOW_PULSES_PER_LITER;
   lastFlowUpdateMs = nowMs;
 }
 
+/**
+ * @brief Check whether a condition has remained true for a minimum duration.
+ *
+ * Uses `sinceMs` as state: resets it when condition is false, sets it on first
+ * true sample, and returns true once the elapsed time reaches `durationMs`.
+ *
+ * @param condition Condition to evaluate.
+ * @param nowMs Current `millis()` timestamp.
+ * @param sinceMs Timestamp storage for when the condition first became true.
+ * @param durationMs Required continuous true duration.
+ * @return true when the condition has been continuously true long enough.
+ * @return false otherwise.
+ */
 bool sustainedFor(bool condition, unsigned long nowMs, unsigned long &sinceMs,
                   unsigned long durationMs) {
   if (!condition) {
@@ -263,10 +323,34 @@ bool sustainedFor(bool condition, unsigned long nowMs, unsigned long &sinceMs,
   return (nowMs - sinceMs) >= durationMs;
 }
 
+/**
+ * @brief Compute 3D vector magnitude.
+ *
+ * @param x X-axis component.
+ * @param y Y-axis component.
+ * @param z Z-axis component.
+ * @return Euclidean norm `sqrt(x^2 + y^2 + z^2)`.
+ */
 float vectorMagnitude3(float x, float y, float z) {
   return sqrtf(x * x + y * y + z * z);
 }
 
+/**
+ * @brief Compute average acceleration magnitude across valid IMUs.
+ *
+ * Uses whichever IMU acceleration triplets are finite, computes each magnitude,
+ * and returns their average.
+ *
+ * @param imu1AxMs2 IMU1 acceleration X (m/s^2).
+ * @param imu1AyMs2 IMU1 acceleration Y (m/s^2).
+ * @param imu1AzMs2 IMU1 acceleration Z (m/s^2).
+ * @param imu2AxMs2 IMU2 acceleration X (m/s^2).
+ * @param imu2AyMs2 IMU2 acceleration Y (m/s^2).
+ * @param imu2AzMs2 IMU2 acceleration Z (m/s^2).
+ * @param[out] accelMagMs2 Output average magnitude (m/s^2) when available.
+ * @return true if at least one IMU provided a valid magnitude.
+ * @return false if no valid IMU acceleration sample was available.
+ */
 bool tryGetAccelMagnitudeMs2(float imu1AxMs2, float imu1AyMs2, float imu1AzMs2,
                              float imu2AxMs2, float imu2AyMs2, float imu2AzMs2,
                              float &accelMagMs2) {
@@ -288,6 +372,9 @@ bool tryGetAccelMagnitudeMs2(float imu1AxMs2, float imu1AyMs2, float imu1AzMs2,
   return true;
 }
 
+/**
+ * @brief Reset launch/microgravity detection state and timers.
+ */
 void resetFlightDetectionState() {
   launchDetected = false;
   microgravityNow = false;
@@ -299,13 +386,29 @@ void resetFlightDetectionState() {
   stopLoggingRequested = false;
 }
 
+/**
+ * @brief Evaluate flight state machine and update valve command.
+ *
+ * Computes filtered acceleration magnitude, detects launch and microgravity
+ * entry/exit using sustained threshold checks, and commands valve state.
+ *
+ * @param nowMs Current `millis()` timestamp.
+ * @param imu1AxMs2 IMU1 acceleration X (m/s^2).
+ * @param imu1AyMs2 IMU1 acceleration Y (m/s^2).
+ * @param imu1AzMs2 IMU1 acceleration Z (m/s^2).
+ * @param imu2AxMs2 IMU2 acceleration X (m/s^2).
+ * @param imu2AyMs2 IMU2 acceleration Y (m/s^2).
+ * @param imu2AzMs2 IMU2 acceleration Z (m/s^2).
+ */
 void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
                             float imu1AyMs2, float imu1AzMs2, float imu2AxMs2,
                             float imu2AyMs2, float imu2AzMs2) {
+  // Behavior: master flight logic disable -> do not alter valve automatically.
   if (!ENABLE_AUTO_VALVE_FLIGHT_LOGIC) {
     return;
   }
 
+  // Behavior: hold safe state until tare is complete and arm delay has elapsed.
   if (!sensorTareComplete || nowMs < flightLogicReadyMs) {
     microgravityNow = false;
     setValve(false);
@@ -313,6 +416,7 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
   }
 
   float accelMagMs2 = NAN;
+  // Behavior: no valid acceleration estimate -> fail safe with valve closed.
   if (!tryGetAccelMagnitudeMs2(imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2,
                                imu2AyMs2, imu2AzMs2, accelMagMs2)) {
     microgravityNow = false;
@@ -320,6 +424,7 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
     return;
   }
 
+  // EMA filter reduces single-sample spikes before threshold checks.
   if (!isfinite(filteredAccelMagMs2)) {
     filteredAccelMagMs2 = accelMagMs2;
   } else {
@@ -327,6 +432,7 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
         ACCEL_MAG_FILTER_ALPHA * (accelMagMs2 - filteredAccelMagMs2);
   }
 
+  // Behavior: once launch is confirmed, latch `launchDetected`.
   if (!launchDetected) {
     bool launchCondition = filteredAccelMagMs2 >= LAUNCH_ACCEL_THRESHOLD_MS2;
     if (sustainedFor(launchCondition, nowMs, launchConditionStartMs,
@@ -336,10 +442,12 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
     }
   }
 
+  // Behavior: test override to force launch state without threshold check.
   if (FORCE_LAUNCH_DETECTED_FOR_TEST) {
     launchDetected = true;
   }
 
+  // Behavior: bench-test mode opens valve from accel threshold only.
   if (OPEN_VALVE_ON_ACCEL_FOR_TEST) {
     bool openCondition = filteredAccelMagMs2 >= TEST_OPEN_ACCEL_THRESHOLD_MS2;
     bool valveShouldOpen = sustainedFor(
@@ -354,7 +462,9 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
     return;
   }
 
+  // Hysteresis: lower threshold to enter microgravity, higher to exit.
   bool prevMicrogravityNow = microgravityNow;
+  // Behavior: microgravity detection only runs after launch latch.
   if (launchDetected) {
     bool microCondition = false;
     if (!microgravityNow) {
@@ -379,16 +489,23 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
   }
 
   if (launchDetected) {
+    // Behavior: valve follows current microgravity state during flight.
     if (microgravityNow) {
       setValve(true);
     } else {
       setValve(false);
     }
   } else {
+    // Behavior: never open valve pre-launch in normal flight logic.
     setValve(false);
   }
 }
 
+/**
+ * @brief Scan and print all responding I2C addresses.
+ *
+ * Useful for wiring and address diagnostics during bring-up.
+ */
 void scanI2CBus() {
   Serial.println("I2C scan start");
   uint8_t found = 0;
@@ -418,6 +535,12 @@ void scanI2CBus() {
   Serial.println("I2C scan done");
 }
 
+/**
+ * @brief Initialize onboard sensors and update health flags.
+ *
+ * Configures available sensors and records per-device status for logging and
+ * runtime logic.
+ */
 void initSensors() {
   // Reset flags each start attempt.
   adxlOk = false;
@@ -486,7 +609,14 @@ void initSensors() {
   }
 }
 
+/**
+ * @brief Measure and store tare offsets for enabled sensors.
+ *
+ * Collects multiple samples to estimate baseline offsets used to zero data
+ * during logging.
+ */
 void calibrateSensorTares() {
+  // Behavior: start from known zero offsets each calibration cycle.
   adxlXTareMs2 = 0.0f;
   adxlYTareMs2 = 0.0f;
   adxlZTareMs2 = 0.0f;
@@ -506,11 +636,13 @@ void calibrateSensorTares() {
   bmpPressTareHpa = 0.0f;
   bmpAltTareM = 0.0f;
 
+  // Behavior: optional bypass for quicker startup/testing.
   if (!ENABLE_SENSOR_TARE) {
     sensorTareComplete = true;
     return;
   }
 
+  // Accumulators and valid-sample counters for each sensor stream.
   float adxlXSum = 0.0f, adxlYSum = 0.0f, adxlZSum = 0.0f;
   unsigned int adxlCount = 0;
   float imu1AxSum = 0.0f, imu1AySum = 0.0f, imu1AzSum = 0.0f;
@@ -523,6 +655,7 @@ void calibrateSensorTares() {
   unsigned int bmpCount = 0;
 
   for (unsigned int i = 0; i < SENSOR_TARE_SAMPLES; i++) {
+    // Behavior: collect ADXL tare sample when available and finite.
     if (adxlOk) {
       sensors_event_t event;
       accel.getEvent(&event);
@@ -535,6 +668,7 @@ void calibrateSensorTares() {
       }
     }
 
+    // Behavior: collect IMU1 accel/gyro tare samples independently.
     if (imu1Ok) {
       sensors_event_t imu1AccelEvent;
       sensors_event_t imu1GyroEvent;
@@ -558,6 +692,7 @@ void calibrateSensorTares() {
       }
     }
 
+    // Behavior: collect IMU2 accel/gyro tare samples independently.
     if (imu2Ok) {
       sensors_event_t imu2AccelEvent;
       sensors_event_t imu2GyroEvent;
@@ -581,6 +716,7 @@ void calibrateSensorTares() {
       }
     }
 
+    // Behavior: collect BMP temperature/pressure/altitude baseline.
     if (bmpOk && bmp.performReading()) {
       float tempC = bmp.temperature;
       float pressHpa = bmp.pressure / 100.0f;
@@ -596,6 +732,7 @@ void calibrateSensorTares() {
     delay(SENSOR_TARE_DELAY_MS);
   }
 
+  // Behavior: commit average tare only when at least one valid sample exists.
   if (adxlCount > 0) {
     adxlXTareMs2 = adxlXSum / (float)adxlCount;
     adxlYTareMs2 = adxlYSum / (float)adxlCount;
@@ -627,6 +764,7 @@ void calibrateSensorTares() {
     bmpAltTareM = bmpAltSum / (float)bmpCount;
   }
 
+  // Behavior: print final tare values for bench verification/debugging.
   Serial.print("ADXL X tare (m/s^2): ");
   Serial.println(adxlXTareMs2, 4);
   Serial.print("ADXL Y tare (m/s^2): ");
@@ -666,6 +804,14 @@ void calibrateSensorTares() {
   sensorTareComplete = true;
 }
 
+/**
+ * @brief Stop logging and return system to idle/safe state.
+ *
+ * Flushes and closes the log file, disables outputs as needed, and powers down
+ * sensor rail.
+ *
+ * @param reason Human-readable reason printed to serial console.
+ */
 void stopLogging(const char *reason) {
   if (loggingActive && logFile) {
     logFile.flush();
@@ -681,6 +827,14 @@ void stopLogging(const char *reason) {
   powerSensorsOff();
 }
 
+/**
+ * @brief Send a framed LoRa command/telemetry packet.
+ *
+ * Packet format: destination, source, message ID, payload length, payload.
+ *
+ * @param destination LoRa recipient address.
+ * @param outgoing Payload string to transmit.
+ */
 void sendLoRaMessage(uint8_t destination, const String &outgoing) {
   if (!loraOk)
     return;
@@ -694,22 +848,32 @@ void sendLoRaMessage(uint8_t destination, const String &outgoing) {
   LoRa.endPacket();
 }
 
+/**
+ * @brief Start a new logging session.
+ *
+ * Powers sensors, initializes devices, performs tare calibration, creates a log
+ * file, and resets runtime timers/state.
+ */
 void startLogging() {
+  // Behavior: ignore duplicate START requests while already active.
   if (loggingActive) {
     return;
   }
 
+  // Behavior: bring hardware online and calibrate before opening log file.
   sensorTareComplete = false;
   powerSensorsOn();
   initSensors();
   calibrateSensorTares();
 
+  // Behavior: abort startup safely if log file cannot be created.
   if (!createNextLogFile()) {
     Serial.println("Could not create log file");
     powerSensorsOff();
     return;
   }
 
+  // Behavior: initialize session timing/state baselines.
   startTime = millis();
   currentFileStartMs = startTime;
   lastLogMs = startTime;
@@ -717,6 +881,7 @@ void startLogging() {
   lastFlowUpdateMs = startTime;
   flowHz = 0.0f;
   flowLpm = 0.0f;
+  // Behavior: clear flow pulse counter atomically before sampling begins.
   noInterrupts();
   flowPulseCount = 0;
   interrupts();
@@ -726,6 +891,15 @@ void startLogging() {
   Serial.println("Logging started");
 }
 
+/**
+ * @brief Rotate to a new log file segment.
+ *
+ * Closes current file and creates the next `logNNN.csv` file.
+ *
+ * @param nowMs Current `millis()` timestamp used to reset segment start time.
+ * @return true if rotation succeeded.
+ * @return false if rotation failed and logging was stopped.
+ */
 bool rotateLogFile(unsigned long nowMs) {
   if (!loggingActive || !logFile) {
     return false;
@@ -745,6 +919,15 @@ bool rotateLogFile(unsigned long nowMs) {
   return true;
 }
 
+/**
+ * @brief Parse and execute a control command.
+ *
+ * Supports start/stop/scan/valve/ping command set from serial or LoRa sources.
+ *
+ * @param cmd Command text to parse (normalized in-place).
+ * @param source Command source label for diagnostics (e.g. "Serial", "LoRa").
+ * @param sender Sender LoRa address used for replies (default: ground station).
+ */
 void executeCommand(String cmd, const char *source,
                     uint8_t sender = LORA_GROUND_ADDRESS) {
   cmd.trim();
@@ -772,6 +955,11 @@ void executeCommand(String cmd, const char *source,
   }
 }
 
+/**
+ * @brief Handle inbound LoRa command packets.
+ *
+ * Supports framed packet format and backward-compatible plain-text packets.
+ */
 void handleLoRaCommands() {
   if (!loraOk) {
     return;
@@ -812,6 +1000,11 @@ void handleLoRaCommands() {
   executeCommand(plain, "LoRa");
 }
 
+/**
+ * @brief Handle one pending serial command line.
+ *
+ * Reads until newline and dispatches through the common command parser.
+ */
 void handleSerialCommands() {
   if (!Serial.available()) {
     return;
@@ -821,7 +1014,16 @@ void handleSerialCommands() {
   executeCommand(cmd, "Serial");
 }
 
+/**
+ * @brief Acquire sensors and append one CSV log row.
+ *
+ * Reads enabled sensors, applies tare offsets, updates flight/valve logic, and
+ * writes one formatted sample row to the current log file.
+ *
+ * @param nowMs Current `millis()` timestamp for this sample.
+ */
 void collectAndLogRow(unsigned long nowMs) {
+  // Default each channel to NAN so missing sensors are explicit in CSV.
   float adxlX = NAN, adxlY = NAN, adxlZ = NAN;
   float imu1AxMs2 = NAN, imu1AyMs2 = NAN, imu1AzMs2 = NAN;
   float imu1GxRadS = NAN, imu1GyRadS = NAN, imu1GzRadS = NAN;
@@ -832,6 +1034,8 @@ void collectAndLogRow(unsigned long nowMs) {
   float tempC = NAN, pressHpa = NAN, altM = NAN, accelMagMs2 = NAN;
   uint32_t sensorStatus = 0;
 
+  // Bitfield packs sensor availability + flight state into one CSV column.
+  // Behavior: ADXL read + tare correction.
   if (adxlOk) {
     sensors_event_t event;
     accel.getEvent(&event);
@@ -841,6 +1045,7 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 0);
   }
 
+  // Behavior: IMU1 read, compute accel norm, and apply gyro tare.
   if (imu1Ok) {
     sensors_event_t imu1AccelEvent;
     sensors_event_t imu1GyroEvent;
@@ -865,6 +1070,7 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 1);
   }
 
+  // Behavior: IMU2 read, compute accel norm, and apply gyro tare.
   if (imu2Ok) {
     sensors_event_t imu2AccelEvent;
     sensors_event_t imu2GyroEvent;
@@ -889,6 +1095,7 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 2);
   }
 
+  // Behavior: BMP read + tare correction when fresh sample is available.
   if (bmpOk && bmp.performReading()) {
     tempC = bmp.temperature - bmpTempTareC;
     pressHpa = (bmp.pressure / 100.0f) - bmpPressTareHpa;
@@ -896,6 +1103,7 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 3);
   }
 
+  // Behavior: mark presence/status bits for non-sampled subsystems.
   if (capOk) {
     sensorStatus |= (1u << 4);
   }
@@ -903,12 +1111,15 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 5);
   }
 
+  // Behavior: derived acceleration magnitude used by flight logic and logs.
   tryGetAccelMagnitudeMs2(imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2, imu2AyMs2,
                           imu2AzMs2, accelMagMs2);
 
+  // Behavior: update launch/microgravity/valve state for this sample.
   updateFlightValveLogic(nowMs, imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2,
                          imu2AyMs2, imu2AzMs2);
 
+  // Behavior: encode current flight-state flags into status bitfield.
   if (valveOpen) {
     sensorStatus |= (1u << 6);
   }
@@ -919,6 +1130,7 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 8);
   }
 
+  // Behavior: append one complete, fixed-column CSV row.
   logFile.printf(
       "%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,"
       "%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
@@ -929,6 +1141,11 @@ void collectAndLogRow(unsigned long nowMs) {
       (unsigned long)sensorStatus);
 }
 
+/**
+ * @brief Arduino setup routine.
+ *
+ * Initializes pins, buses, storage, radio, and optionally starts logging.
+ */
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) {
@@ -979,12 +1196,20 @@ void setup() {
   }
 }
 
+/**
+ * @brief Arduino main loop.
+ *
+ * Processes incoming commands, executes periodic logging/flow updates, and
+ * handles flush, file rotation, and auto-stop conditions.
+ */
 void loop() {
   unsigned long nowMs = millis();
 
+  // Behavior: command channels are always serviced, even when not logging.
   handleLoRaCommands();
   handleSerialCommands();
 
+  // Behavior: idle fast when logging is inactive.
   if (!loggingActive) {
     return;
   }
@@ -993,24 +1218,28 @@ void loop() {
   // against the same or newer timestamp than startTime/lastLogMs.
   nowMs = millis();
 
+  // Behavior: run periodic sampling/logging at configured interval.
   if (nowMs - lastLogMs >= LOG_INTERVAL_MS) {
     lastLogMs = nowMs;
     updateFlowStats(nowMs);
     collectAndLogRow(nowMs);
   }
 
+  // Behavior: stop request from flight logic is handled immediately.
   if (stopLoggingRequested) {
     stopLoggingRequested = false;
     stopLogging("microgravity exited");
     return;
   }
 
+  // Behavior: periodic SD flush to reduce data loss on sudden power loss.
   if (nowMs - lastFlushMs >= FLUSH_INTERVAL_MS) {
     lastFlushMs = nowMs;
     logFile.flush();
     Serial.println("SD flush");
   }
 
+  // Behavior: rotate file by elapsed segment duration.
   if (nowMs - currentFileStartMs >= LOG_FILE_DURATION_MS) {
     if (!rotateLogFile(nowMs)) {
       return;
@@ -1018,6 +1247,7 @@ void loop() {
     lastFlushMs = nowMs;
   }
 
+  // Behavior: hard cap total logging duration as safety bound.
   if (nowMs - startTime >= MAX_LOG_DURATION_MS) {
     stopLogging("max duration reached");
   }
