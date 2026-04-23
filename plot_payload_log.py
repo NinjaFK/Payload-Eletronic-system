@@ -6,6 +6,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+SHOW_FLOW_HZ = False
+
 
 def to_float(value: str):
     if value is None:
@@ -175,7 +177,7 @@ def plot_file(log_path: Path, out_dir: Path):
             f"{stem}_flow_valve",
             t_s,
             {
-                "flow_hz": series(rows, "flow_hz"),
+                **({"flow_hz": series(rows, "flow_hz")} if SHOW_FLOW_HZ else {}),
                 "flow_lpm": series(rows, "flow_lpm"),
                 "valve": series(rows, "valve"),
             },
@@ -316,7 +318,7 @@ def main():
                 f"{stem}_bmp",
                 t_s,
                 {
-                    "temp_c": series(rows, "temp_c"),
+                    # "temp_c": series(rows, "temp_c"),
                     "press_hpa": series(rows, "press_hpa"),
                     "alt_m": series(rows, "alt_m"),
                 },
@@ -329,7 +331,7 @@ def main():
                 f"{stem}_flow_valve",
                 t_s,
                 {
-                    "flow_hz": series(rows, "flow_hz"),
+                    **({"flow_hz": series(rows, "flow_hz")} if SHOW_FLOW_HZ else {}),
                     "flow_lpm": series(rows, "flow_lpm"),
                     "valve": series(rows, "valve"),
                 },
