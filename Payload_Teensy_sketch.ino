@@ -43,7 +43,7 @@ const bool ENABLE_VALVE_CONTROL = true; // set true when valve driver is wired
 // Logging timing
 const unsigned long LOG_INTERVAL_MS = 20; // ~50 Hz
 const unsigned long FLUSH_INTERVAL_MS = 1000;
-const unsigned long FLOW_UPDATE_MS = 1000;
+const unsigned long FLOW_UPDATE_MS = 100;
 const unsigned long LOG_FILE_DURATION_MS = 20000;  // rotate file every 20 s
 const unsigned long MAX_LOG_DURATION_MS = 1800000; // auto-stop after 30 min
 const bool AUTO_START_ON_BOOT = false;             // set true for bench tests
