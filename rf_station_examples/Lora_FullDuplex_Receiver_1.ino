@@ -45,6 +45,16 @@ const long heartbeatInterval = 3000;
 
 bool ledState = false;
 
+bool isOpenEvent(const String &msg) {
+  return msg == "OPEN" || msg == "VALVE_ON" || msg == "VALVE_OPEN" ||
+         msg == "VALVE=1";
+}
+
+bool isCloseEvent(const String &msg) {
+  return msg == "CLOSE" || msg == "VALVE_OFF" || msg == "VALVE_CLOSED" ||
+         msg == "VALVE=0";
+}
+
 void setup() {
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(redLEDPin, OUTPUT);
@@ -151,14 +161,20 @@ void onReceive(int packetSize) {
   Serial.println("Received: " + incoming);
 
   if (incoming == "START" || incoming == "STOP" || incoming == "PING" ||
-      incoming == "OPEN" || incoming == "CLOSE" || incoming == "SCAN") {
+      isOpenEvent(incoming) || isCloseEvent(incoming) || incoming == "SCAN") {
     Serial.println("Command received: " + incoming);
+  }
+
+  if (isOpenEvent(incoming)) {
+    Serial.println("VALVE OPEN");
+  } else if (isCloseEvent(incoming)) {
+    Serial.println("VALVE CLOSED");
   }
 
   // ANY valid message keeps connection alive
   if (incoming.equals(buttonPress) || incoming.equals(heartbeatMsg) ||
       incoming == "START" || incoming == "STOP" || incoming == "PING" ||
-      incoming == "OPEN" || incoming == "CLOSE" || incoming == "SCAN") {
+      isOpenEvent(incoming) || isCloseEvent(incoming) || incoming == "SCAN") {
 
     lastReceiveTime = millis();
 

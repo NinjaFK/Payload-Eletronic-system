@@ -45,6 +45,16 @@ const long heartbeatInterval = 3000;
 
 bool ledState = false;
 
+bool isOpenEvent(const String &msg) {
+  return msg == "OPEN" || msg == "VALVE_ON" || msg == "VALVE_OPEN" ||
+         msg == "VALVE=1";
+}
+
+bool isCloseEvent(const String &msg) {
+  return msg == "CLOSE" || msg == "VALVE_OFF" || msg == "VALVE_CLOSED" ||
+         msg == "VALVE=0";
+}
+
 void handleSerialCommand() {
   if (!Serial.available())
     return;
@@ -61,6 +71,11 @@ void handleSerialCommand() {
     sendMessage(cmd);
     LoRa.receive();
     Serial.println("Sent command: " + cmd);
+    if (isOpenEvent(cmd)) {
+      Serial.println("VALVE OPEN command sent");
+    } else if (isCloseEvent(cmd)) {
+      Serial.println("VALVE CLOSE command sent");
+    }
   } else {
     Serial.println("Unknown command. Use START/STOP/PING/OPEN/CLOSE/SCAN");
   }
@@ -177,8 +192,16 @@ void onReceive(int packetSize) {
 
   Serial.println("Received: " + incoming);
 
+  if (isOpenEvent(incoming)) {
+    Serial.println("VALVE OPEN");
+  } else if (isCloseEvent(incoming)) {
+    Serial.println("VALVE CLOSED");
+  }
+
   // ANY valid message keeps connection alive
-  if (incoming.equals(buttonPress) || incoming.equals(heartbeatMsg)) {
+  if (incoming.equals(buttonPress) || incoming.equals(heartbeatMsg) ||
+      incoming == "START" || incoming == "STOP" || incoming == "PING" ||
+      incoming == "SCAN" || isOpenEvent(incoming) || isCloseEvent(incoming)) {
 
     lastReceiveTime = millis();
 
