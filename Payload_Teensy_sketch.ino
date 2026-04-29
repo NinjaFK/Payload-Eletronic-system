@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <TimeLib.h>
 #include <Wire.h>
 
 // Sensors
@@ -44,10 +45,14 @@ const bool ENABLE_VALVE_CONTROL = true; // set true when valve driver is wired
 const unsigned long LOG_INTERVAL_MS = 20; // ~50 Hz
 const unsigned long FLUSH_INTERVAL_MS = 1000;
 const unsigned long FLOW_UPDATE_MS = 100;
-const unsigned long LOG_FILE_DURATION_MS = 20000;  // rotate file every 20 s
-const unsigned long MAX_LOG_DURATION_MS = 1800000; // auto-stop after 30 min
-const bool AUTO_START_ON_BOOT = false;             // set true for bench tests
+const unsigned long LIVE_TIME_REPORT_MS = 500;
+const unsigned long RF_TIME_REPORT_MS = 500;
+const unsigned long LOG_FILE_DURATION_MS = 20000;   // rotate file every 20 s
+const unsigned long MAX_LOG_DURATION_MS = 14000000; // auto-stop after 4 hours
+const bool AUTO_START_ON_BOOT = false;              // set true for bench tests
 const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
+const bool ENABLE_LIVE_TIME_REPORT = true;
+const bool ENABLE_RF_TIME_REPORT = true;
 
 // Valve
 const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = true;
@@ -90,6 +95,8 @@ unsigned long startTime = 0;
 unsigned long currentFileStartMs = 0;
 unsigned long lastLogMs = 0;
 unsigned long lastFlushMs = 0;
+unsigned long lastLiveTimeReportMs = 0;
+unsigned long lastRfTimeReportMs = 0;
 
 // Sensor health flags
 bool adxlOk = false;
@@ -134,6 +141,13 @@ float bmpPressTareHpa = 0.0f;
 float bmpAltTareM = 0.0f;
 
 /**
+ * @brief TimeLib sync provider callback using Teensy RTC.
+ *
+ * @return Current RTC epoch time.
+ */
+time_t getRtcTime() { return Teensy3Clock.get(); }
+
+/**
  * @brief Flow sensor interrupt service routine.
  *
  * Increments the shared pulse counter on each detected flow pulse.
@@ -161,7 +175,7 @@ bool createNextLogFile() {
       }
 
       logFile.println(
-          "ms,adxl_x,adxl_y,adxl_z,"
+          "datetime_local,ms,adxl_x,adxl_y,adxl_z,"
           "imu1_ax_ms2,imu1_ay_ms2,imu1_az_ms2,imu1_gx_rads,imu1_gy_rads,"
           "imu1_gz_rads,imu1_accel_norm_g,"
           "imu2_ax_ms2,imu2_ay_ms2,imu2_az_ms2,imu2_gx_rads,imu2_gy_rads,"
@@ -878,6 +892,8 @@ void startLogging() {
   currentFileStartMs = startTime;
   lastLogMs = startTime;
   lastFlushMs = startTime;
+  lastLiveTimeReportMs = startTime;
+  lastRfTimeReportMs = startTime;
   lastFlowUpdateMs = startTime;
   flowHz = 0.0f;
   flowLpm = 0.0f;
@@ -917,6 +933,106 @@ bool rotateLogFile(unsigned long nowMs) {
   currentFileStartMs = nowMs;
   Serial.println("Log file rotated");
   return true;
+}
+
+/**
+ * @brief Format elapsed milliseconds as `hh:mm:ss.mmm`.
+ *
+ * @param elapsedMs Elapsed session time in milliseconds.
+ * @param out Destination buffer.
+ * @param outLen Destination buffer length.
+ */
+void formatElapsedTime(unsigned long elapsedMs, char *out, size_t outLen) {
+  unsigned long hours = elapsedMs / 3600000UL;
+  unsigned long minutes = (elapsedMs % 3600000UL) / 60000UL;
+  unsigned long seconds = (elapsedMs % 60000UL) / 1000UL;
+  unsigned long millisPart = elapsedMs % 1000UL;
+  snprintf(out, outLen, "%02lu:%02lu:%02lu.%03lu", hours, minutes, seconds,
+           millisPart);
+}
+
+/**
+ * @brief Format current local RTC time as `M/D/YYYY h:mm:ss AM/PM`.
+ *
+ * Writes `"NA"` when the RTC has not been set.
+ *
+ * @param out Destination buffer.
+ * @param outLen Destination buffer length.
+ */
+void formatCurrentDateTime(char *out, size_t outLen) {
+  if (timeStatus() == timeNotSet) {
+    snprintf(out, outLen, "NA");
+    return;
+  }
+
+  time_t nowTime = now();
+  int hour24 = hour(nowTime);
+  bool isPm = (hour24 >= 12);
+  int hour12 = hour24 % 12;
+  if (hour12 == 0) {
+    hour12 = 12;
+  }
+
+  snprintf(out, outLen, "%d/%d/%d %d:%02d:%02d %s", month(nowTime), day(nowTime),
+           year(nowTime), hour12, minute(nowTime), second(nowTime),
+           isPm ? "PM" : "AM");
+}
+
+/**
+ * @brief Periodically print live elapsed logging time to serial.
+ *
+ * Prints elapsed session time as `hh:mm:ss.mmm` and raw milliseconds while
+ * logging is active.
+ *
+ * @param nowMs Current `millis()` timestamp.
+ */
+void reportLiveTime(unsigned long nowMs) {
+  if (!ENABLE_LIVE_TIME_REPORT || !loggingActive) {
+    return;
+  }
+  if (nowMs - lastLiveTimeReportMs < LIVE_TIME_REPORT_MS) {
+    return;
+  }
+
+  lastLiveTimeReportMs = nowMs;
+  unsigned long elapsedMs = nowMs - startTime;
+  char elapsedText[16];
+  char wallClockText[24];
+  formatElapsedTime(elapsedMs, elapsedText, sizeof(elapsedText));
+  formatCurrentDateTime(wallClockText, sizeof(wallClockText));
+
+  Serial.print("Time ");
+  Serial.print(wallClockText);
+  Serial.print(" +");
+  Serial.print(elapsedText);
+  Serial.print(" (");
+  Serial.print(elapsedMs);
+  Serial.println(" ms)");
+}
+
+/**
+ * @brief Periodically transmit elapsed logging time over LoRa.
+ *
+ * @param nowMs Current `millis()` timestamp.
+ */
+void reportLiveTimeRf(unsigned long nowMs) {
+  if (!ENABLE_RF_TIME_REPORT || !loggingActive) {
+    return;
+  }
+  if (nowMs - lastRfTimeReportMs < RF_TIME_REPORT_MS) {
+    return;
+  }
+
+  lastRfTimeReportMs = nowMs;
+  unsigned long elapsedMs = nowMs - startTime;
+  char elapsedText[16];
+  char wallClockText[24];
+  char outgoing[80];
+  formatElapsedTime(elapsedMs, elapsedText, sizeof(elapsedText));
+  formatCurrentDateTime(wallClockText, sizeof(wallClockText));
+  snprintf(outgoing, sizeof(outgoing), "TIME=%s,elapsed=%s,ms=%lu",
+           wallClockText, elapsedText, elapsedMs);
+  sendLoRaMessage(LORA_GROUND_ADDRESS, outgoing);
 }
 
 /**
@@ -1023,6 +1139,9 @@ void handleSerialCommands() {
  * @param nowMs Current `millis()` timestamp for this sample.
  */
 void collectAndLogRow(unsigned long nowMs) {
+  char wallClockText[24];
+  formatCurrentDateTime(wallClockText, sizeof(wallClockText));
+
   // Default each channel to NAN so missing sensors are explicit in CSV.
   float adxlX = NAN, adxlY = NAN, adxlZ = NAN;
   float imu1AxMs2 = NAN, imu1AyMs2 = NAN, imu1AzMs2 = NAN;
@@ -1132,12 +1251,12 @@ void collectAndLogRow(unsigned long nowMs) {
 
   // Behavior: append one complete, fixed-column CSV row.
   logFile.printf(
-      "%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,"
-      "%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
-      nowMs, adxlX, adxlY, adxlZ, imu1AxMs2, imu1AyMs2, imu1AzMs2, imu1GxRadS,
-      imu1GyRadS, imu1GzRadS, imu1AccelNormG, imu2AxMs2, imu2AyMs2, imu2AzMs2,
-      imu2GxRadS, imu2GyRadS, imu2GzRadS, imu2AccelNormG, tempC, pressHpa, altM,
-      accelMagMs2, flowHz, flowLpm, valveOpen ? 1u : 0u,
+      "%s,%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,"
+      "%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
+      wallClockText, nowMs, adxlX, adxlY, adxlZ, imu1AxMs2, imu1AyMs2,
+      imu1AzMs2, imu1GxRadS, imu1GyRadS, imu1GzRadS, imu1AccelNormG, imu2AxMs2,
+      imu2AyMs2, imu2AzMs2, imu2GxRadS, imu2GyRadS, imu2GzRadS, imu2AccelNormG,
+      tempC, pressHpa, altM, accelMagMs2, flowHz, flowLpm, valveOpen ? 1u : 0u,
       (unsigned long)sensorStatus);
 }
 
@@ -1167,6 +1286,13 @@ void setup() {
   }
 
   Wire.begin();
+  setSyncProvider(getRtcTime);
+  setSyncInterval(60);
+  if (timeStatus() == timeSet) {
+    Serial.println("RTC time synced");
+  } else {
+    Serial.println("RTC time not set");
+  }
 
   if (!sd.begin(SD_CONFIG)) {
     Serial.println("SD init failed");
@@ -1217,6 +1343,8 @@ void loop() {
   // START may have been processed above; refresh so time deltas are computed
   // against the same or newer timestamp than startTime/lastLogMs.
   nowMs = millis();
+  reportLiveTime(nowMs);
+  reportLiveTimeRf(nowMs);
 
   // Behavior: run periodic sampling/logging at configured interval.
   if (nowMs - lastLogMs >= LOG_INTERVAL_MS) {
