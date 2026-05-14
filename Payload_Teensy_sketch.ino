@@ -22,7 +22,7 @@
 #define RFM95_CS 4
 #define RFM95_RST 2
 #define RFM95_INT 3
-#define RF95_FREQ 915E6
+#define RF95_FREQ 433E6
 const uint8_t LORA_LOCAL_ADDRESS = 0xDD;  // payload
 const uint8_t LORA_GROUND_ADDRESS = 0xCC; // home station
 const uint8_t LORA_BROADCAST = 0xFF;
@@ -973,9 +973,9 @@ void formatCurrentDateTime(char *out, size_t outLen) {
     hour12 = 12;
   }
 
-  snprintf(out, outLen, "%d/%d/%d %d:%02d:%02d %s", month(nowTime), day(nowTime),
-           year(nowTime), hour12, minute(nowTime), second(nowTime),
-           isPm ? "PM" : "AM");
+  snprintf(out, outLen, "%d/%d/%d %d:%02d:%02d %s", month(nowTime),
+           day(nowTime), year(nowTime), hour12, minute(nowTime),
+           second(nowTime), isPm ? "PM" : "AM");
 }
 
 /**
