@@ -69,6 +69,9 @@ const unsigned long MICROGRAVITY_CONFIRM_MS = 200;
 const float ACCEL_MAG_FILTER_ALPHA = 0.15f;
 const unsigned long FLIGHT_LOGIC_ARM_DELAY_MS = 300;
 const bool STOP_LOGGING_ON_MICROGRAVITY_EXIT = true;
+const uint8_t MPR121_WATER_ELECTRODE = 0;
+const float WATER_DRY_RAW = 130.0f; // tune from dry reading
+const float WATER_WET_RAW = 240.0f; // tune from fully wet reading
 
 // Flow meter spec: F(Hz) = 98 * Q(L/min) => pulses/liter = 98*60 = 5880.
 const float FLOW_PULSES_PER_LITER = 5880.0f;
@@ -78,7 +81,19 @@ const unsigned long SENSOR_TARE_DELAY_MS = 2;
 
 SdFs sd;
 FsFile logFile;
+#if defined(FIFO_SDIO)
 #define SD_CONFIG SdioConfig(FIFO_SDIO)
+#elif defined(BUILTIN_SDCARD)
+#define SD_CONFIG SdioConfig()
+#else
+#define SD_CONFIG SdSpiConfig(SS, SHARED_SPI)
+#endif
+
+#if defined(CORE_TEENSY)
+#define HAS_TEENSY3_RTC 1
+#else
+#define HAS_TEENSY3_RTC 0
+#endif
 
 // Sensor objects
 Adafruit_ADXL375 accel(12345, &Wire); // I2C mode
@@ -145,7 +160,13 @@ float bmpAltTareM = 0.0f;
  *
  * @return Current RTC epoch time.
  */
-time_t getRtcTime() { return Teensy3Clock.get(); }
+time_t getRtcTime() {
+#if HAS_TEENSY3_RTC
+  return Teensy3Clock.get();
+#else
+  return 0;
+#endif
+}
 
 /**
  * @brief Flow sensor interrupt service routine.
@@ -180,8 +201,8 @@ bool createNextLogFile() {
           "imu1_gz_rads,imu1_accel_norm_g,"
           "imu2_ax_ms2,imu2_ay_ms2,imu2_az_ms2,imu2_gx_rads,imu2_gy_rads,"
           "imu2_gz_rads,imu2_accel_norm_g,"
-          "temp_c,press_hpa,alt_m,accel_mag_ms2,flow_hz,flow_lpm,valve,"
-          "sensor_status");
+          "temp_c,press_hpa,alt_m,accel_mag_ms2,flow_hz,flow_lpm,"
+          "cap_raw,water_pct,valve,sensor_status");
       logFile.flush();
       Serial.print("Opened ");
       Serial.println(filename);
@@ -609,6 +630,11 @@ void initSensors() {
     Serial.println("MPR121 detected");
   } else {
     Serial.println("MPR121 not detected");
+  }
+
+  if (capOk) {
+    Serial.println("Running auto configuration.");
+    cap.setAutoconfig(true);
   }
 
   if (bmp.begin_I2C()) {
@@ -1151,6 +1177,8 @@ void collectAndLogRow(unsigned long nowMs) {
   float imu2GxRadS = NAN, imu2GyRadS = NAN, imu2GzRadS = NAN;
   float imu2AccelNormG = NAN;
   float tempC = NAN, pressHpa = NAN, altM = NAN, accelMagMs2 = NAN;
+  float capRaw = NAN;
+  float waterPct = NAN;
   uint32_t sensorStatus = 0;
 
   // Bitfield packs sensor availability + flight state into one CSV column.
@@ -1222,10 +1250,22 @@ void collectAndLogRow(unsigned long nowMs) {
     sensorStatus |= (1u << 3);
   }
 
-  // Behavior: mark presence/status bits for non-sampled subsystems.
+  // Behavior: read capacitive water channel and estimate linear water percent.
   if (capOk) {
+    capRaw = (float)cap.filteredData(MPR121_WATER_ELECTRODE);
+    if (WATER_WET_RAW > WATER_DRY_RAW) {
+      float waterRatio =
+          (capRaw - WATER_DRY_RAW) / (WATER_WET_RAW - WATER_DRY_RAW);
+      if (waterRatio < 0.0f) {
+        waterRatio = 0.0f;
+      } else if (waterRatio > 1.0f) {
+        waterRatio = 1.0f;
+      }
+      waterPct = waterRatio * 100.0f;
+    }
     sensorStatus |= (1u << 4);
   }
+  // Behavior: mark presence/status bits for non-sampled subsystems.
   if (flowOk) {
     sensorStatus |= (1u << 5);
   }
@@ -1252,12 +1292,13 @@ void collectAndLogRow(unsigned long nowMs) {
   // Behavior: append one complete, fixed-column CSV row.
   logFile.printf(
       "%s,%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,"
-      "%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%lu\n",
+      "%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%"
+      "lu\n",
       wallClockText, nowMs, adxlX, adxlY, adxlZ, imu1AxMs2, imu1AyMs2,
       imu1AzMs2, imu1GxRadS, imu1GyRadS, imu1GzRadS, imu1AccelNormG, imu2AxMs2,
       imu2AyMs2, imu2AzMs2, imu2GxRadS, imu2GyRadS, imu2GzRadS, imu2AccelNormG,
-      tempC, pressHpa, altM, accelMagMs2, flowHz, flowLpm, valveOpen ? 1u : 0u,
-      (unsigned long)sensorStatus);
+      tempC, pressHpa, altM, accelMagMs2, flowHz, flowLpm, capRaw, waterPct,
+      valveOpen ? 1u : 0u, (unsigned long)sensorStatus);
 }
 
 /**
