@@ -1,5 +1,5 @@
-#include <SPI.h>
 #include <LoRa.h>
+#include <SPI.h>
 
 // LoRa pins
 const int csPin = 4;
@@ -70,7 +70,8 @@ void setup() {
 
   if (!LoRa.begin(433E6)) {
     Serial.println("LoRa failed!");
-    while (1);
+    while (1)
+      ;
   }
 
   LoRa.onReceive(onReceive);
@@ -115,17 +116,17 @@ void loop() {
   // -------- STATE ACTIONS --------
   switch (currentState) {
 
-    case IDLE:
-      handleBlink(currentMillis, false, idleBlinkInterval);
-      break;
+  case IDLE:
+    handleBlink(currentMillis, false, idleBlinkInterval);
+    break;
 
-    case CONNECTED:
-      handleBlink(currentMillis, true, blueBlinkInterval);
-      break;
+  case CONNECTED:
+    handleBlink(currentMillis, true, blueBlinkInterval);
+    break;
 
-    case LOST:
-      handleBlink(currentMillis, false, lostBlinkInterval);
-      break;
+  case LOST:
+    handleBlink(currentMillis, false, lostBlinkInterval);
+    break;
   }
 }
 
@@ -143,7 +144,8 @@ void sendMessage(String outgoing) {
 
 // -------- RECEIVE FUNCTION --------
 void onReceive(int packetSize) {
-  if (packetSize == 0) return;
+  if (packetSize == 0)
+    return;
 
   int recipient = LoRa.read();
   byte sender = LoRa.read();
@@ -155,8 +157,10 @@ void onReceive(int packetSize) {
     incoming += (char)LoRa.read();
   }
 
-  if (incomingLength != incoming.length()) return;
-  if (recipient != localAddress) return;
+  if (incomingLength != incoming.length())
+    return;
+  if (recipient != localAddress)
+    return;
 
   Serial.println("Received: " + incoming);
 
