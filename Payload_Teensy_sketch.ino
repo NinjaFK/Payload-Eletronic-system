@@ -34,7 +34,7 @@ const uint8_t LORA_BROADCAST = 0xFF;
 #define FLOW_SENSOR_PIN 7
 #define VALVE_ACTIVE_HIGH true
 const bool USE_SENSOR_POWER_SWITCH = false; // debug: bypass rail toggle
-const bool ENABLE_FLOW_SENSOR = true;   // set true when flow sensor is wired
+const bool ENABLE_FLOW_SENSOR = false;  // set true when flow sensor is wired
 const bool ENABLE_VALVE_CONTROL = true; // set true when valve driver is wired
 
 // IMU I2C addresses
@@ -70,8 +70,25 @@ const float ACCEL_MAG_FILTER_ALPHA = 0.15f;
 const unsigned long FLIGHT_LOGIC_ARM_DELAY_MS = 300;
 const bool STOP_LOGGING_ON_MICROGRAVITY_EXIT = true;
 const uint8_t MPR121_WATER_ELECTRODE = 0;
-const float WATER_DRY_RAW = 130.0f; // tune from dry reading
-const float WATER_WET_RAW = 240.0f; // tune from fully wet reading
+// Capacitive calibration from recent bench logs:
+// dry/mostly-air run ~697 raw baseline, full-water run ~724.5 raw.
+const float CAP_CAL_AIR_RAW = 697.0f;
+const float CAP_CAL_WATER_RAW = 724.5f;
+const float DIELECTRIC_AIR = 1.0006f;
+const float DIELECTRIC_WATER = 80.0f;
+const float CAP_RAW_FILTER_ALPHA = 0.12f; // raw count smoothing
+const float CAP_WATER_PCT_ALPHA = 0.20f;  // EMA filter to reduce chatter
+const bool ENABLE_CAP_STARTUP_TARE = true;
+const bool CAP_TARE_ALIGN_TO_AIR = true;
+const float CAP_TARE_OFFSET_APPLY_THRESHOLD_RAW = 20.0f;
+const float CAP_TARE_MAX_ABS_OFFSET_RAW = 300.0f;
+const bool ENABLE_CAP_ESTIMATED_FLOW = true;
+// Fluid volume represented by the capacitive sensing zone (liters).
+const float CAP_SENSOR_VOLUME_L = 0.010f;
+// Use absolute fill change so mixed slug/bubble flow still reports activity.
+const bool CAP_ESTIMATED_FLOW_USE_ABS_DELTA = true;
+const float CAP_FLOW_FRAC_DEADBAND = 0.01f; // ignore <1% sample-to-sample fill
+const float CAP_ESTIMATED_FLOW_MAX_LPM = 2.0f;
 
 // Flow meter spec: F(Hz) = 98 * Q(L/min) => pulses/liter = 98*60 = 5880.
 const float FLOW_PULSES_PER_LITER = 5880.0f;
@@ -154,6 +171,13 @@ float imu2GzTareRadS = 0.0f;
 float bmpTempTareC = 0.0f;
 float bmpPressTareHpa = 0.0f;
 float bmpAltTareM = 0.0f;
+float filteredWaterPct = NAN;
+float filteredCapRaw = NAN;
+float lastWaterFracForFlow = NAN;
+unsigned long lastCapEstimateMs = 0;
+float capStartupBaselineRaw = NAN;
+float capRawAlignOffset = 0.0f;
+bool capStartupTareValid = false;
 
 /**
  * @brief TimeLib sync provider callback using Teensy RTC.
@@ -368,6 +392,41 @@ bool sustainedFor(bool condition, unsigned long nowMs, unsigned long &sinceMs,
  */
 float vectorMagnitude3(float x, float y, float z) {
   return sqrtf(x * x + y * y + z * z);
+}
+
+/**
+ * @brief Clamp a scalar to [0, 1].
+ */
+float clamp01(float v) {
+  if (v < 0.0f) {
+    return 0.0f;
+  }
+  if (v > 1.0f) {
+    return 1.0f;
+  }
+  return v;
+}
+
+/**
+ * @brief Convert MPR121 filtered count into estimated water fraction.
+ *
+ * Uses a 2-point calibration between known air and known full-water states.
+ * Because capacitance scales with dielectric constant, this ratio is a proxy
+ * for water fill in the sensing field.
+ *
+ * @param capRaw MPR121 filteredData raw count.
+ * @return Estimated water fraction [0..1], or NAN if invalid calibration.
+ */
+float estimateWaterFractionFromCapRaw(float capRaw) {
+  if (!isfinite(capRaw)) {
+    return NAN;
+  }
+  float span = CAP_CAL_WATER_RAW - CAP_CAL_AIR_RAW;
+  if (fabsf(span) < 1e-6f) {
+    return NAN;
+  }
+  float ratio = (capRaw - CAP_CAL_AIR_RAW) / span;
+  return clamp01(ratio);
 }
 
 /**
@@ -675,6 +734,9 @@ void calibrateSensorTares() {
   bmpTempTareC = 0.0f;
   bmpPressTareHpa = 0.0f;
   bmpAltTareM = 0.0f;
+  capStartupBaselineRaw = NAN;
+  capRawAlignOffset = 0.0f;
+  capStartupTareValid = false;
 
   // Behavior: optional bypass for quicker startup/testing.
   if (!ENABLE_SENSOR_TARE) {
@@ -693,6 +755,8 @@ void calibrateSensorTares() {
   unsigned int imu2AccCount = 0, imu2GyroCount = 0;
   float bmpTempSum = 0.0f, bmpPressSum = 0.0f, bmpAltSum = 0.0f;
   unsigned int bmpCount = 0;
+  float capRawSum = 0.0f;
+  unsigned int capCount = 0;
 
   for (unsigned int i = 0; i < SENSOR_TARE_SAMPLES; i++) {
     // Behavior: collect ADXL tare sample when available and finite.
@@ -769,6 +833,15 @@ void calibrateSensorTares() {
       }
     }
 
+    // Behavior: collect startup capacitance baseline for session alignment.
+    if (capOk && ENABLE_CAP_STARTUP_TARE) {
+      float capSample = (float)cap.filteredData(MPR121_WATER_ELECTRODE);
+      if (isfinite(capSample)) {
+        capRawSum += capSample;
+        capCount++;
+      }
+    }
+
     delay(SENSOR_TARE_DELAY_MS);
   }
 
@@ -802,6 +875,21 @@ void calibrateSensorTares() {
     bmpTempTareC = bmpTempSum / (float)bmpCount;
     bmpPressTareHpa = bmpPressSum / (float)bmpCount;
     bmpAltTareM = bmpAltSum / (float)bmpCount;
+  }
+  if (capCount > 0) {
+    capStartupBaselineRaw = capRawSum / (float)capCount;
+    capStartupTareValid = true;
+
+    if (CAP_TARE_ALIGN_TO_AIR) {
+      float requestedOffset = CAP_CAL_AIR_RAW - capStartupBaselineRaw;
+      float absRequestedOffset = fabsf(requestedOffset);
+      if (absRequestedOffset >= CAP_TARE_OFFSET_APPLY_THRESHOLD_RAW &&
+          absRequestedOffset <= CAP_TARE_MAX_ABS_OFFSET_RAW) {
+        capRawAlignOffset = requestedOffset;
+      } else {
+        capRawAlignOffset = 0.0f;
+      }
+    }
   }
 
   // Behavior: print final tare values for bench verification/debugging.
@@ -841,6 +929,10 @@ void calibrateSensorTares() {
   Serial.print(bmpPressTareHpa, 4);
   Serial.print(", ");
   Serial.println(bmpAltTareM, 4);
+  Serial.print("CAP startup baseline raw: ");
+  Serial.println(capStartupBaselineRaw, 2);
+  Serial.print("CAP raw alignment offset: ");
+  Serial.println(capRawAlignOffset, 2);
   sensorTareComplete = true;
 }
 
@@ -923,6 +1015,14 @@ void startLogging() {
   lastFlowUpdateMs = startTime;
   flowHz = 0.0f;
   flowLpm = 0.0f;
+  filteredWaterPct = NAN;
+  filteredCapRaw = NAN;
+  lastWaterFracForFlow = NAN;
+  lastCapEstimateMs = 0;
+  if (!capStartupTareValid) {
+    capStartupBaselineRaw = NAN;
+    capRawAlignOffset = 0.0f;
+  }
   // Behavior: clear flow pulse counter atomically before sampling begins.
   noInterrupts();
   flowPulseCount = 0;
@@ -1253,15 +1353,57 @@ void collectAndLogRow(unsigned long nowMs) {
   // Behavior: read capacitive water channel and estimate linear water percent.
   if (capOk) {
     capRaw = (float)cap.filteredData(MPR121_WATER_ELECTRODE);
-    if (WATER_WET_RAW > WATER_DRY_RAW) {
-      float waterRatio =
-          (capRaw - WATER_DRY_RAW) / (WATER_WET_RAW - WATER_DRY_RAW);
-      if (waterRatio < 0.0f) {
-        waterRatio = 0.0f;
-      } else if (waterRatio > 1.0f) {
-        waterRatio = 1.0f;
+    float capRawAdjusted = capRaw + capRawAlignOffset;
+    if (!isfinite(filteredCapRaw)) {
+      filteredCapRaw = capRawAdjusted;
+    } else {
+      filteredCapRaw +=
+          CAP_RAW_FILTER_ALPHA * (capRawAdjusted - filteredCapRaw);
+    }
+
+    float waterFrac = estimateWaterFractionFromCapRaw(filteredCapRaw);
+    if (isfinite(waterFrac)) {
+      float rawWaterPct = waterFrac * 100.0f;
+      if (!isfinite(filteredWaterPct)) {
+        filteredWaterPct = rawWaterPct;
+      } else {
+        filteredWaterPct +=
+            CAP_WATER_PCT_ALPHA * (rawWaterPct - filteredWaterPct);
       }
-      waterPct = waterRatio * 100.0f;
+      waterPct = filteredWaterPct;
+
+      // Effective dielectric estimate can be useful while tuning calibration.
+      float effectivePermittivity =
+          DIELECTRIC_AIR + waterFrac * (DIELECTRIC_WATER - DIELECTRIC_AIR);
+      (void)effectivePermittivity;
+
+      // If the pulse flow meter is not connected, publish a capacitive
+      // activity-based flow estimate in flow_lpm.
+      if (!ENABLE_FLOW_SENSOR && ENABLE_CAP_ESTIMATED_FLOW) {
+        if (lastCapEstimateMs != 0 && isfinite(lastWaterFracForFlow)) {
+          unsigned long dtMs = nowMs - lastCapEstimateMs;
+          if (dtMs > 0) {
+            float waterFracForFlow = filteredWaterPct * 0.01f;
+            float deltaFrac = waterFracForFlow - lastWaterFracForFlow;
+            if (CAP_ESTIMATED_FLOW_USE_ABS_DELTA) {
+              deltaFrac = fabsf(deltaFrac);
+            } else if (deltaFrac < 0.0f) {
+              deltaFrac = 0.0f;
+            }
+            if (deltaFrac < CAP_FLOW_FRAC_DEADBAND) {
+              deltaFrac = 0.0f;
+            }
+            flowHz = deltaFrac * (1000.0f / (float)dtMs);
+            flowLpm =
+                deltaFrac * CAP_SENSOR_VOLUME_L * (60000.0f / (float)dtMs);
+            if (flowLpm > CAP_ESTIMATED_FLOW_MAX_LPM) {
+              flowLpm = CAP_ESTIMATED_FLOW_MAX_LPM;
+            }
+          }
+        }
+        lastWaterFracForFlow = filteredWaterPct * 0.01f;
+        lastCapEstimateMs = nowMs;
+      }
     }
     sensorStatus |= (1u << 4);
   }
