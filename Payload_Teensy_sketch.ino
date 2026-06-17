@@ -26,6 +26,7 @@
 const uint8_t LORA_LOCAL_ADDRESS = 0xA1;  // payload/receiver node
 const uint8_t LORA_GROUND_ADDRESS = 0xCC; // ground/home station
 const uint8_t LORA_BROADCAST = 0xFF;
+const uint8_t LORA_SYNC_WORD = 0x12;
 
 // Power switch control pin (Teensy GPIO -> TPS1H200A IN)
 // Update this to the exact pin used on your PCB.
@@ -1131,6 +1132,7 @@ void reportLiveTime(unsigned long nowMs) {
   Serial.print(wallClockText);
   Serial.print(" +");
   Serial.print(elapsedText);
+#define RFM95_INT 3
   Serial.print(" (");
   Serial.print(elapsedMs);
   Serial.println(" ms)");
@@ -1156,8 +1158,8 @@ void reportLiveTimeRf(unsigned long nowMs) {
   char outgoing[80];
   formatElapsedTime(elapsedMs, elapsedText, sizeof(elapsedText));
   formatCurrentDateTime(wallClockText, sizeof(wallClockText));
-  snprintf(outgoing, sizeof(outgoing), "TIME=%s,elapsed=%s,ms=%lu",
-           wallClockText, elapsedText, elapsedMs);
+  snprintf(outgoing, sizeof(outgoing), "Time %s +%s (%lu ms)", wallClockText,
+           elapsedText, elapsedMs);
   sendLoRaMessage(LORA_GROUND_ADDRESS, outgoing);
 }
 
@@ -1181,11 +1183,14 @@ void executeCommand(String cmd, const char *source,
   Serial.print(source);
   Serial.print(" cmd: ");
   Serial.println(cmd);
+  sendLoRaMessage(sender, String(source) + " cmd: " + cmd);
 
   if (cmd == "START" || cmd == "BUTTON PRESSED") {
     startLogging();
+    sendLoRaMessage(sender, "STARTED");
   } else if (cmd == "STOP") {
     stopLogging("STOP command");
+    sendLoRaMessage(sender, "STOPPED");
   } else if (cmd == "SCAN") {
     scanI2CBus();
   } else if (cmd == "OPEN" || cmd == "VALVE_ON") {
@@ -1237,8 +1242,18 @@ void handleLoRaCommands() {
 
   // Compatibility mode: plain-text packet.
   String plain;
-  for (size_t i = 0; i < n; i++)
-    plain += (char)rx[i];
+  for (size_t i = 0; i < n; i++) {
+    char c = (char)rx[i];
+    // Reject noise/binary payloads in compatibility mode.
+    if ((uint8_t)c < 32 || (uint8_t)c > 126) {
+      return;
+    }
+    plain += c;
+  }
+  plain.trim();
+  if (plain.length() == 0) {
+    return;
+  }
   executeCommand(plain, "LoRa");
 }
 
@@ -1496,6 +1511,8 @@ void setup() {
     Serial.println("LoRa init failed, continuing without RF control");
     loraOk = false;
   } else {
+    LoRa.setSyncWord(LORA_SYNC_WORD);
+    LoRa.enableCrc();
     loraOk = true;
     Serial.println("LoRa ready; waiting for START/STOP commands");
   }
@@ -1548,6 +1565,7 @@ void loop() {
     lastFlushMs = nowMs;
     logFile.flush();
     Serial.println("SD flush");
+    sendLoRaMessage(LORA_GROUND_ADDRESS, "SD flush");
   }
 
   // Behavior: rotate file by elapsed segment duration.

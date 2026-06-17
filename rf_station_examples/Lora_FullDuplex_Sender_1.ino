@@ -15,6 +15,10 @@ const int blueLEDPin = 6;
 // Button
 const int buttonPin = 8;
 int sendButtonState;
+int lastButtonState = HIGH;
+const bool enableButtonSend = false; // set true to allow button->START packets
+unsigned long lastButtonEdgeMs = 0;
+const unsigned long buttonDebounceMs = 40;
 
 // Messages
 String buttonPress = "button pressed";
@@ -28,6 +32,7 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 // -------- CHANGE PER DEVICE --------
 byte localAddress = 0xCC;
 byte destination = 0xA1; // payload address
+const byte loraSyncWord = 0x12;
 // ----------------------------------
 
 // FSM
@@ -131,9 +136,8 @@ void setup() {
     while (1)
       ;
   }
-
-  LoRa.onReceive(onReceive);
-  LoRa.receive();
+  LoRa.setSyncWord(loraSyncWord);
+  LoRa.enableCrc();
 
   Serial.println("LoRa FSM with Heartbeat Ready");
   lcdLog("LoRa FSM Ready");
@@ -145,22 +149,26 @@ void loop() {
 
   unsigned long currentMillis = millis();
   handleSerialCommand();
+  int packetSize = LoRa.parsePacket();
+  if (packetSize) {
+    onReceive(packetSize);
+  }
 
   // -------- BUTTON SEND --------
   sendButtonState = digitalRead(buttonPin);
-
-  if (sendButtonState == LOW) {
+  if (enableButtonSend && lastButtonState == HIGH && sendButtonState == LOW &&
+      (currentMillis - lastButtonEdgeMs) >= buttonDebounceMs) {
+    lastButtonEdgeMs = currentMillis;
     sendMessage(buttonPress);
     delay(200);
-    LoRa.receive();
   }
+  lastButtonState = sendButtonState;
 
   // -------- HEARTBEAT SEND --------
   if (currentMillis - lastHeartbeatTime >= heartbeatInterval) {
     lastHeartbeatTime = currentMillis;
 
     sendMessage(heartbeatMsg);
-    LoRa.receive();
 
     Serial.println("Heartbeat sent");
     lcdLog("Heartbeat sent");
@@ -226,8 +234,10 @@ void onReceive(int packetSize) {
   if (recipient != localAddress)
     return;
 
-  Serial.println("Received: " + incoming);
-  lcdLog("Received: " + incoming);
+  bool isTelemetry =
+      incoming.startsWith("Time ") || incoming.startsWith("LoRa cmd: ") ||
+      incoming.startsWith("Serial cmd: ") || incoming == "SD flush" ||
+      incoming == "STARTED" || incoming == "STOPPED" || incoming == "PONG";
 
   if (isOpenEvent(incoming)) {
     Serial.println("VALVE OPEN");
@@ -240,7 +250,8 @@ void onReceive(int packetSize) {
   // ANY valid message keeps connection alive
   if (incoming.equals(buttonPress) || incoming.equals(heartbeatMsg) ||
       incoming == "START" || incoming == "STOP" || incoming == "PING" ||
-      incoming == "SCAN" || isOpenEvent(incoming) || isCloseEvent(incoming)) {
+      incoming == "SCAN" || isOpenEvent(incoming) || isCloseEvent(incoming) ||
+      isTelemetry) {
 
     lastReceiveTime = millis();
 
