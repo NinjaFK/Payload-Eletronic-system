@@ -22,9 +22,9 @@
 #define RFM95_CS 4
 #define RFM95_RST 2
 #define RFM95_INT 3
-#define RF95_FREQ 433E6
-const uint8_t LORA_LOCAL_ADDRESS = 0xDD;  // payload
-const uint8_t LORA_GROUND_ADDRESS = 0xCC; // home station
+#define RF95_FREQ 421.48E6
+const uint8_t LORA_LOCAL_ADDRESS = 0xA1;  // payload/receiver node
+const uint8_t LORA_GROUND_ADDRESS = 0xCC; // ground/home station
 const uint8_t LORA_BROADCAST = 0xFF;
 
 // Power switch control pin (Teensy GPIO -> TPS1H200A IN)

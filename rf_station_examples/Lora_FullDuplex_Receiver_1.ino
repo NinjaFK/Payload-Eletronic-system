@@ -1,5 +1,7 @@
+#include <LiquidCrystal_I2C.h>
 #include <LoRa.h>
 #include <SPI.h>
+#include <Wire.h>
 
 // LoRa pins
 const int csPin = 4;
@@ -20,9 +22,12 @@ String heartbeatMsg = "hb";
 
 byte msgCount = 0;
 
+// LCD Screen
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
 // -------- CHANGE PER DEVICE --------
-byte localAddress = 0xA1; // receiver address
-byte destination = 0xCC;
+byte localAddress = 0xCC;
+byte destination = 0xA1; // payload address
 // ----------------------------------
 
 // FSM
@@ -55,10 +60,74 @@ bool isCloseEvent(const String &msg) {
          msg == "VALVE=0";
 }
 
+void handleSerialCommand() {
+  if (!Serial.available())
+    return;
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  cmd.toUpperCase();
+
+  if (cmd.length() == 0)
+    return;
+
+  if (cmd == "START" || cmd == "STOP" || cmd == "PING" || cmd == "OPEN" ||
+      cmd == "CLOSE" || cmd == "SCAN") {
+    sendMessage(cmd);
+    LoRa.receive();
+    Serial.println("Sent command: " + cmd);
+    if (isOpenEvent(cmd)) {
+      Serial.println("VALVE OPEN command sent");
+      lcdLog("VALVE OPEN command sent");
+    } else if (isCloseEvent(cmd)) {
+      Serial.println("VALVE CLOSE command sent");
+      lcdLog("VALVE CLOSE command sent");
+    }
+  } else {
+    Serial.println("Unknown command. Use START/STOP/PING/OPEN/CLOSE/SCAN");
+    lcdLog("Unknown command. Use START/STOP/PING/OPEN/CLOSE/SCAN");
+  }
+}
+
+// ---------- LCD Screen Initalization -------
+String lcdLines[4] = {"", "", "", ""};
+
+void lcdLog(String msg) {
+  if (msg.length() > 20)
+    msg = msg.substring(0, 20);
+
+  lcdLines[0] = lcdLines[1];
+  lcdLines[1] = lcdLines[2];
+  lcdLines[2] = lcdLines[3];
+  lcdLines[3] = msg;
+
+  lcd.clear();
+
+  for (int i = 0; i < 4; i++) {
+    lcd.setCursor(0, i);
+    lcd.print(lcdLines[i]);
+  }
+}
+
 void setup() {
-  pinMode(buttonPin, INPUT_PULLUP);
-  pinMode(redLEDPin, OUTPUT);
-  pinMode(blueLEDPin, OUTPUT);
+  lcd.init();
+  lcd.backlight();
+
+  // lcd.setCursor(0,0);
+  // lcd.print("LCD TEST");
+
+  // lcd.setCursor(0,1);
+  // lcd.print("Line 2");
+
+  // lcd.setCursor(0,2);
+  // lcd.print("Line 3");
+
+  // lcd.setCursor(0,3);
+  // lcd.print("Line 4");
+
+  // pinMode(buttonPin, INPUT_PULLUP);
+  // pinMode(redLEDPin, OUTPUT);
+  // pinMode(blueLEDPin, OUTPUT);
 
   Serial.begin(9600);
 
@@ -70,6 +139,7 @@ void setup() {
 
   if (!LoRa.begin(433E6)) {
     Serial.println("LoRa failed!");
+    lcdLog("LoRa failed!");
     while (1)
       ;
   }
@@ -78,11 +148,22 @@ void setup() {
   LoRa.receive();
 
   Serial.println("LoRa FSM with Heartbeat Ready");
+  lcdLog("LoRa FSM with Heartbeat Ready");
+  Serial.println("USB commands: START/STOP/PING/OPEN/CLOSE/SCAN");
+  lcdLog("USB commands: START/STOP/PING/OPEN/CLOSE/SCAN");
+
+  // -------- LCD DISPLAY FUNCTION  --------
+  lcd.init();
+  lcd.backlight();
+
+  lcd.clear();
+  lcd.print("LoRa Starting...");
 }
 
 void loop() {
 
   unsigned long currentMillis = millis();
+  handleSerialCommand();
 
   // -------- BUTTON SEND --------
   sendButtonState = digitalRead(buttonPin);
@@ -101,6 +182,7 @@ void loop() {
     LoRa.receive();
 
     Serial.println("Heartbeat sent");
+    lcdLog("Heartbeat sent");
   }
 
   // -------- STATE TRANSITIONS --------
@@ -108,6 +190,7 @@ void loop() {
       (currentMillis - lastReceiveTime > signalTimeout)) {
 
     Serial.println("Connection LOST");
+    lcdLog("onnection LOST");
 
     currentState = LOST;
     previousMillis = millis();
@@ -163,27 +246,26 @@ void onReceive(int packetSize) {
     return;
 
   Serial.println("Received: " + incoming);
-
-  if (incoming == "START" || incoming == "STOP" || incoming == "PING" ||
-      isOpenEvent(incoming) || isCloseEvent(incoming) || incoming == "SCAN") {
-    Serial.println("Command received: " + incoming);
-  }
+  lcdLog("Received: " + incoming);
 
   if (isOpenEvent(incoming)) {
     Serial.println("VALVE OPEN");
+    lcdLog("VALVE OPEN");
   } else if (isCloseEvent(incoming)) {
     Serial.println("VALVE CLOSED");
+    lcdLog("VALVE CLOSED");
   }
 
   // ANY valid message keeps connection alive
   if (incoming.equals(buttonPress) || incoming.equals(heartbeatMsg) ||
       incoming == "START" || incoming == "STOP" || incoming == "PING" ||
-      isOpenEvent(incoming) || isCloseEvent(incoming) || incoming == "SCAN") {
+      incoming == "SCAN" || isOpenEvent(incoming) || isCloseEvent(incoming)) {
 
     lastReceiveTime = millis();
 
     if (currentState != CONNECTED) {
       Serial.println("Connection ESTABLISHED");
+      lcdLog("Connection ESTABLISHED");
       previousMillis = millis();
     }
 

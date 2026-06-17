@@ -1,5 +1,7 @@
+#include <LiquidCrystal_I2C.h>
 #include <LoRa.h>
 #include <SPI.h>
+#include <Wire.h>
 
 // LoRa pins
 const int csPin = 4;
@@ -20,9 +22,12 @@ String heartbeatMsg = "hb";
 
 byte msgCount = 0;
 
+// LCD Screen
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
 // -------- CHANGE PER DEVICE --------
 byte localAddress = 0xCC;
-byte destination = 0xDD; // payload address
+byte destination = 0xA1; // payload address
 // ----------------------------------
 
 // FSM
@@ -55,6 +60,25 @@ bool isCloseEvent(const String &msg) {
          msg == "VALVE=0";
 }
 
+// ---------- LCD log buffer ----------
+String lcdLines[4] = {"", "", "", ""};
+
+void lcdLog(String msg) {
+  if (msg.length() > 20)
+    msg = msg.substring(0, 20);
+
+  lcdLines[0] = lcdLines[1];
+  lcdLines[1] = lcdLines[2];
+  lcdLines[2] = lcdLines[3];
+  lcdLines[3] = msg;
+
+  lcd.clear();
+  for (int i = 0; i < 4; i++) {
+    lcd.setCursor(0, i);
+    lcd.print(lcdLines[i]);
+  }
+}
+
 void handleSerialCommand() {
   if (!Serial.available())
     return;
@@ -71,17 +95,24 @@ void handleSerialCommand() {
     sendMessage(cmd);
     LoRa.receive();
     Serial.println("Sent command: " + cmd);
+    lcdLog("Sent command: " + cmd);
     if (isOpenEvent(cmd)) {
       Serial.println("VALVE OPEN command sent");
+      lcdLog("VALVE OPEN command");
     } else if (isCloseEvent(cmd)) {
       Serial.println("VALVE CLOSE command sent");
+      lcdLog("VALVE CLOSE command");
     }
   } else {
     Serial.println("Unknown command. Use START/STOP/PING/OPEN/CLOSE/SCAN");
+    lcdLog("Unknown command");
   }
 }
 
 void setup() {
+  lcd.init();
+  lcd.backlight();
+
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(redLEDPin, OUTPUT);
   pinMode(blueLEDPin, OUTPUT);
@@ -94,8 +125,9 @@ void setup() {
 
   LoRa.setPins(csPin, resetPin, irqPin);
 
-  if (!LoRa.begin(433E6)) {
+  if (!LoRa.begin(421.48E6)) {
     Serial.println("LoRa failed!");
+    lcdLog("LoRa failed!");
     while (1)
       ;
   }
@@ -104,7 +136,9 @@ void setup() {
   LoRa.receive();
 
   Serial.println("LoRa FSM with Heartbeat Ready");
+  lcdLog("LoRa FSM Ready");
   Serial.println("USB commands: START/STOP/PING/OPEN/CLOSE/SCAN");
+  lcdLog("USB: START/STOP/...");
 }
 
 void loop() {
@@ -129,6 +163,7 @@ void loop() {
     LoRa.receive();
 
     Serial.println("Heartbeat sent");
+    lcdLog("Heartbeat sent");
   }
 
   // -------- STATE TRANSITIONS --------
@@ -136,6 +171,7 @@ void loop() {
       (currentMillis - lastReceiveTime > signalTimeout)) {
 
     Serial.println("Connection LOST");
+    lcdLog("Connection LOST");
 
     currentState = LOST;
     previousMillis = millis();
@@ -191,11 +227,14 @@ void onReceive(int packetSize) {
     return;
 
   Serial.println("Received: " + incoming);
+  lcdLog("Received: " + incoming);
 
   if (isOpenEvent(incoming)) {
     Serial.println("VALVE OPEN");
+    lcdLog("VALVE OPEN");
   } else if (isCloseEvent(incoming)) {
     Serial.println("VALVE CLOSED");
+    lcdLog("VALVE CLOSED");
   }
 
   // ANY valid message keeps connection alive
@@ -207,6 +246,7 @@ void onReceive(int packetSize) {
 
     if (currentState != CONNECTED) {
       Serial.println("Connection ESTABLISHED");
+      lcdLog("Connection ESTAB");
       previousMillis = millis();
     }
 
