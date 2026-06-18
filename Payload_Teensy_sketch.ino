@@ -23,6 +23,10 @@
 #define RFM95_RST 2
 #define RFM95_INT 3
 #define RF95_FREQ 421.48E6
+const long LORA_BASE_FREQ_HZ = 421480000L;
+const long LORA_FREQ_STEP_HZ = 125000L;
+const long LORA_MIN_FREQ_HZ = 420600000L;
+const long LORA_MAX_FREQ_HZ = 438000000L;
 const uint8_t LORA_LOCAL_ADDRESS = 0xA1;  // payload/receiver node
 const uint8_t LORA_GROUND_ADDRESS = 0xCC; // ground/home station
 const uint8_t LORA_BROADCAST = 0xFF;
@@ -143,6 +147,7 @@ bool valveOpen = false;
 bool launchDetected = false;
 bool microgravityNow = false;
 byte loraMsgCount = 0;
+long loraCurrentFrequencyHz = LORA_BASE_FREQ_HZ;
 
 volatile uint32_t flowPulseCount = 0;
 float flowHz = 0.0f;
@@ -1179,6 +1184,50 @@ void reportLiveTimeRf(unsigned long nowMs) {
   sendLoRaMessage(LORA_GROUND_ADDRESS, outgoing);
 }
 
+bool parseLongArg(const String &text, long &valueOut) {
+  if (text.length() == 0) {
+    return false;
+  }
+  int index = 0;
+  if (text[0] == '+' || text[0] == '-') {
+    if (text.length() == 1) {
+      return false;
+    }
+    index = 1;
+  }
+  for (int i = index; i < text.length(); i++) {
+    if (!isDigit(text[i])) {
+      return false;
+    }
+  }
+  valueOut = text.toInt();
+  return true;
+}
+
+bool applyLoRaFrequencyStep(long step) {
+  if (!loraOk) {
+    return false;
+  }
+
+  int64_t nextFreq =
+      (int64_t)LORA_BASE_FREQ_HZ + ((int64_t)step * (int64_t)LORA_FREQ_STEP_HZ);
+  if (nextFreq < LORA_MIN_FREQ_HZ || nextFreq > LORA_MAX_FREQ_HZ) {
+    return false;
+  }
+
+  LoRa.idle();
+  LoRa.setFrequency((long)nextFreq);
+  LoRa.receive();
+  loraCurrentFrequencyHz = (long)nextFreq;
+
+  Serial.print("LoRa frequency set to ");
+  Serial.print(loraCurrentFrequencyHz);
+  Serial.print(" Hz (step ");
+  Serial.print(step);
+  Serial.println(")");
+  return true;
+}
+
 /**
  * @brief Parse and execute a control command.
  *
@@ -1215,6 +1264,23 @@ void executeCommand(String cmd, const char *source,
     setValve(false);
   } else if (cmd == "PING" || cmd == "HB") {
     sendLoRaMessage(sender, "PONG");
+  } else if (cmd.startsWith("SET ")) {
+    String stepText = cmd.substring(4);
+    stepText.trim();
+
+    long step = 0;
+    if (!parseLongArg(stepText, step)) {
+      sendLoRaMessage(sender, "SET ERR: use SET <step>");
+      return;
+    }
+
+    if (!applyLoRaFrequencyStep(step)) {
+      sendLoRaMessage(sender, "SET ERR: out of range or LoRa not ready");
+      return;
+    }
+
+    sendLoRaMessage(sender, "FREQ " + String(step) + " " +
+                                String(loraCurrentFrequencyHz));
   }
 }
 
@@ -1529,14 +1595,15 @@ void setup() {
   delay(10);
 
   LoRa.setPins(RFM95_CS, RFM95_RST, RFM95_INT);
-  if (!LoRa.begin(RF95_FREQ)) {
+  if (!LoRa.begin(LORA_BASE_FREQ_HZ)) {
     Serial.println("LoRa init failed, continuing without RF control");
     loraOk = false;
   } else {
     LoRa.setSyncWord(LORA_SYNC_WORD);
     LoRa.enableCrc();
+    loraCurrentFrequencyHz = LORA_BASE_FREQ_HZ;
     loraOk = true;
-    Serial.println("LoRa ready; waiting for START/STOP commands");
+    Serial.println("LoRa ready; waiting for START/STOP/SET commands");
   }
 
   if (AUTO_START_ON_BOOT) {

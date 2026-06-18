@@ -7,6 +7,10 @@
 const int csPin = 4;
 const int resetPin = 2;
 const int irqPin = 3;
+const long loraBaseFrequencyHz = 421480000L;
+const long loraFrequencyStepHz = 125000L;
+const long loraMinFrequencyHz = 420600000L;
+const long loraMaxFrequencyHz = 438000000L;
 
 // LEDs
 const int redLEDPin = 5;
@@ -54,6 +58,48 @@ unsigned long lastHeartbeatTime = 0;
 const long heartbeatInterval = 3000;
 
 bool ledState = false;
+long loraCurrentFrequencyHz = loraBaseFrequencyHz;
+
+bool parseLongArg(const String &text, long &valueOut) {
+  if (text.length() == 0) {
+    return false;
+  }
+  int index = 0;
+  if (text[0] == '+' || text[0] == '-') {
+    if (text.length() == 1) {
+      return false;
+    }
+    index = 1;
+  }
+  for (int i = index; i < text.length(); i++) {
+    if (!isDigit(text[i])) {
+      return false;
+    }
+  }
+  valueOut = text.toInt();
+  return true;
+}
+
+bool applyLoRaFrequencyStep(long step) {
+  int64_t nextFreq = (int64_t)loraBaseFrequencyHz +
+                     ((int64_t)step * (int64_t)loraFrequencyStepHz);
+  if (nextFreq < loraMinFrequencyHz || nextFreq > loraMaxFrequencyHz) {
+    return false;
+  }
+
+  LoRa.idle();
+  LoRa.setFrequency((long)nextFreq);
+  LoRa.receive();
+  loraCurrentFrequencyHz = (long)nextFreq;
+
+  Serial.print("LoRa frequency set to ");
+  Serial.print(loraCurrentFrequencyHz);
+  Serial.print(" Hz (step ");
+  Serial.print(step);
+  Serial.println(")");
+  lcdLog("FREQ " + String(step));
+  return true;
+}
 
 bool isOpenEvent(const String &msg) {
   return msg == "OPEN" || msg == "VALVE_ON" || msg == "VALVE_OPEN" ||
@@ -95,8 +141,44 @@ void handleSerialCommand() {
   if (cmd.length() == 0)
     return;
 
-  if (cmd == "START" || cmd == "STOP" || cmd == "PING" || cmd == "OPEN" ||
-      cmd == "CLOSE" || cmd == "SCAN") {
+  if (cmd.startsWith("SETLOCAL ") || cmd.startsWith("LOCALSET ")) {
+    int argStart = cmd.startsWith("SETLOCAL ") ? 9 : 9;
+    String stepText = cmd.substring(argStart);
+    stepText.trim();
+    long step = 0;
+
+    if (!parseLongArg(stepText, step)) {
+      Serial.println("Invalid local set. Use SETLOCAL <step>");
+      lcdLog("SETLOCAL invalid");
+      return;
+    }
+
+    if (!applyLoRaFrequencyStep(step)) {
+      Serial.println("SETLOCAL out of range");
+      lcdLog("SETLOCAL range");
+      return;
+    }
+
+    Serial.println("Sender tuned locally");
+    lcdLog("Sender tuned");
+  } else if (cmd.startsWith("SET ")) {
+    String stepText = cmd.substring(4);
+    stepText.trim();
+    long step = 0;
+
+    if (!parseLongArg(stepText, step)) {
+      Serial.println("Invalid SET command. Use SET <step>");
+      lcdLog("SET invalid");
+      return;
+    }
+
+    // Payload-only set. Sender retune can be done later with SETLOCAL <step>.
+    sendMessage("SET " + String(step));
+    LoRa.receive();
+    Serial.println("Sent command: SET " + String(step));
+    lcdLog("Sent SET " + String(step));
+  } else if (cmd == "START" || cmd == "STOP" || cmd == "PING" ||
+             cmd == "OPEN" || cmd == "CLOSE" || cmd == "SCAN") {
     sendMessage(cmd);
     LoRa.receive();
     Serial.println("Sent command: " + cmd);
@@ -109,7 +191,8 @@ void handleSerialCommand() {
       lcdLog("VALVE CLOSE command");
     }
   } else {
-    Serial.println("Unknown command. Use START/STOP/PING/OPEN/CLOSE/SCAN");
+    Serial.println("Unknown command. Use START/STOP/PING/OPEN/CLOSE/SCAN/SET "
+                   "<step>/SETLOCAL <step>");
     lcdLog("Unknown command");
   }
 }
@@ -130,7 +213,7 @@ void setup() {
 
   LoRa.setPins(csPin, resetPin, irqPin);
 
-  if (!LoRa.begin(421.48E6)) {
+  if (!LoRa.begin(loraBaseFrequencyHz)) {
     Serial.println("LoRa failed!");
     lcdLog("LoRa failed!");
     while (1)
@@ -138,10 +221,12 @@ void setup() {
   }
   LoRa.setSyncWord(loraSyncWord);
   LoRa.enableCrc();
+  loraCurrentFrequencyHz = loraBaseFrequencyHz;
 
   Serial.println("LoRa FSM with Heartbeat Ready");
   lcdLog("LoRa FSM Ready");
-  Serial.println("USB commands: START/STOP/PING/OPEN/CLOSE/SCAN");
+  Serial.println("USB commands: START/STOP/PING/OPEN/CLOSE/SCAN/SET "
+                 "<step>/SETLOCAL <step>");
   lcdLog("USB: START/STOP/...");
 }
 
@@ -237,7 +322,8 @@ void onReceive(int packetSize) {
   bool isTelemetry =
       incoming.startsWith("Time ") || incoming.startsWith("LoRa cmd: ") ||
       incoming.startsWith("Serial cmd: ") || incoming == "SD flush" ||
-      incoming == "STARTED" || incoming == "STOPPED" || incoming == "PONG";
+      incoming == "STARTED" || incoming == "STOPPED" || incoming == "PONG" ||
+      incoming.startsWith("FREQ ");
 
   if (isOpenEvent(incoming)) {
     Serial.println("VALVE OPEN");
