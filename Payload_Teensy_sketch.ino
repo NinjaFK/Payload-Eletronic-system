@@ -62,10 +62,11 @@ const bool FORCE_LAUNCH_DETECTED_FOR_TEST = false;
 const bool OPEN_VALVE_ON_ACCEL_FOR_TEST = false;
 const float TEST_OPEN_ACCEL_THRESHOLD_MS2 = 14.0f;
 const unsigned long TEST_OPEN_CONFIRM_MS = 60;
-const float LAUNCH_ACCEL_THRESHOLD_MS2 = 50.0f; // ~1.3 g
+const float LAUNCH_ACCEL_THRESHOLD_MS2 = 50.0f; // ~5.1 g
 const unsigned long LAUNCH_CONFIRM_MS = 120;
 const float MICROGRAVITY_ENTER_MAX_MS2 = 8.8f; // enter microgravity
-const float MICROGRAVITY_EXIT_MIN_MS2 = 3.0f;  // exit microgravity
+const float MICROGRAVITY_EXIT_HIGH_G_MIN_MS2 =
+    12.0f; // exit microgravity on ADXL high-g event
 const unsigned long MICROGRAVITY_CONFIRM_MS = 200;
 const float ACCEL_MAG_FILTER_ALPHA = 0.15f;
 const unsigned long FLIGHT_LOGIC_ARM_DELAY_MS = 300;
@@ -484,8 +485,9 @@ void resetFlightDetectionState() {
 /**
  * @brief Evaluate flight state machine and update valve command.
  *
- * Computes filtered acceleration magnitude, detects launch and microgravity
- * entry/exit using sustained threshold checks, and commands valve state.
+ * Computes filtered IMU acceleration magnitude, detects launch and
+ * microgravity entry/exit using sustained threshold checks, and commands valve
+ * state. Entry uses IMU low-g, exit uses ADXL high-g.
  *
  * @param nowMs Current `millis()` timestamp.
  * @param imu1AxMs2 IMU1 acceleration X (m/s^2).
@@ -494,10 +496,12 @@ void resetFlightDetectionState() {
  * @param imu2AxMs2 IMU2 acceleration X (m/s^2).
  * @param imu2AyMs2 IMU2 acceleration Y (m/s^2).
  * @param imu2AzMs2 IMU2 acceleration Z (m/s^2).
+ * @param adxlAccelMagMs2 ADXL acceleration magnitude (m/s^2).
  */
 void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
                             float imu1AyMs2, float imu1AzMs2, float imu2AxMs2,
-                            float imu2AyMs2, float imu2AzMs2) {
+                            float imu2AyMs2, float imu2AzMs2,
+                            float adxlAccelMagMs2) {
   // Behavior: master flight logic disable -> do not alter valve automatically.
   if (!ENABLE_AUTO_VALVE_FLIGHT_LOGIC) {
     return;
@@ -557,18 +561,30 @@ void updateFlightValveLogic(unsigned long nowMs, float imu1AxMs2,
     return;
   }
 
-  // Hysteresis: lower threshold to enter microgravity, higher to exit.
+  // Entry: IMU low-g. Exit: ADXL high-g (e.g., drogue deployment impulse).
   bool prevMicrogravityNow = microgravityNow;
   // Behavior: microgravity detection only runs after launch latch.
   if (launchDetected) {
-    bool microCondition = false;
     if (!microgravityNow) {
-      microCondition = filteredAccelMagMs2 <= MICROGRAVITY_ENTER_MAX_MS2;
+      bool enterMicroCondition =
+          filteredAccelMagMs2 <= MICROGRAVITY_ENTER_MAX_MS2;
+      microgravityNow =
+          sustainedFor(enterMicroCondition, nowMs, microConditionStartMs,
+                       MICROGRAVITY_CONFIRM_MS);
     } else {
-      microCondition = filteredAccelMagMs2 <= MICROGRAVITY_EXIT_MIN_MS2;
+      // Fallback to IMU magnitude if ADXL is unavailable for this sample.
+      float exitAccelMagMs2 =
+          isfinite(adxlAccelMagMs2) ? adxlAccelMagMs2 : filteredAccelMagMs2;
+      bool exitMicroCondition =
+          isfinite(exitAccelMagMs2) &&
+          exitAccelMagMs2 >= MICROGRAVITY_EXIT_HIGH_G_MIN_MS2;
+      if (sustainedFor(exitMicroCondition, nowMs, microConditionStartMs,
+                       MICROGRAVITY_CONFIRM_MS)) {
+        microgravityNow = false;
+      } else {
+        microgravityNow = true;
+      }
     }
-    microgravityNow = sustainedFor(microCondition, nowMs, microConditionStartMs,
-                                   MICROGRAVITY_CONFIRM_MS);
   } else {
     microgravityNow = false;
     microConditionStartMs = 0;
@@ -1285,6 +1301,7 @@ void collectAndLogRow(unsigned long nowMs) {
 
   // Default each channel to NAN so missing sensors are explicit in CSV.
   float adxlX = NAN, adxlY = NAN, adxlZ = NAN;
+  float adxlAccelMagMs2 = NAN;
   float imu1AxMs2 = NAN, imu1AyMs2 = NAN, imu1AzMs2 = NAN;
   float imu1GxRadS = NAN, imu1GyRadS = NAN, imu1GzRadS = NAN;
   float imu1AccelNormG = NAN;
@@ -1301,6 +1318,11 @@ void collectAndLogRow(unsigned long nowMs) {
   if (adxlOk) {
     sensors_event_t event;
     accel.getEvent(&event);
+    if (isfinite(event.acceleration.x) && isfinite(event.acceleration.y) &&
+        isfinite(event.acceleration.z)) {
+      adxlAccelMagMs2 = vectorMagnitude3(
+          event.acceleration.x, event.acceleration.y, event.acceleration.z);
+    }
     adxlX = event.acceleration.x - adxlXTareMs2;
     adxlY = event.acceleration.y - adxlYTareMs2;
     adxlZ = (event.acceleration.z - adxlZTareMs2) + GRAVITY_MS2;
@@ -1433,7 +1455,7 @@ void collectAndLogRow(unsigned long nowMs) {
 
   // Behavior: update launch/microgravity/valve state for this sample.
   updateFlightValveLogic(nowMs, imu1AxMs2, imu1AyMs2, imu1AzMs2, imu2AxMs2,
-                         imu2AyMs2, imu2AzMs2);
+                         imu2AyMs2, imu2AzMs2, adxlAccelMagMs2);
 
   // Behavior: encode current flight-state flags into status bitfield.
   if (valveOpen) {
