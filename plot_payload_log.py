@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 SHOW_FLOW_HZ = False
+CAP_WATER_RAW = 570.0
 
 
 def to_float(value: str):
@@ -66,6 +67,29 @@ def has_real(values):
     return any(not math.isnan(v) for v in values)
 
 
+def cap_air_raw_from_rows(rows):
+    cap_raw = series(rows, "cap_raw")
+    finite = [v for v in cap_raw if not math.isnan(v)]
+    if not finite:
+        return math.nan
+    return max(finite)
+
+
+def water_pct_from_cap_raw(cap_raw, cap_air_raw, cap_water_raw=CAP_WATER_RAW):
+    if math.isnan(cap_raw) or math.isnan(cap_air_raw):
+        return math.nan
+    span = cap_air_raw - cap_water_raw
+    if abs(span) < 1e-6:
+        return math.nan
+    pct = ((cap_air_raw - cap_raw) / span) * 100.0
+    return max(0.0, min(100.0, pct))
+
+
+def cap_water_pct_series(rows, cap_air_raw, cap_water_raw=CAP_WATER_RAW):
+    cap_raw = series(rows, "cap_raw")
+    return [water_pct_from_cap_raw(v, cap_air_raw, cap_water_raw) for v in cap_raw]
+
+
 def save_plot(out_dir: Path, name: str, t_s, y_map, title: str):
     available = {k: v for k, v in y_map.items() if has_real(v)}
     if not available:
@@ -86,12 +110,79 @@ def save_plot(out_dir: Path, name: str, t_s, y_map, title: str):
     return out_path
 
 
+def save_cap_plot(
+    out_dir: Path,
+    name: str,
+    t_s,
+    cap_raw,
+    water_pct,
+    title: str,
+    cap_air_raw,
+    cap_water_raw=CAP_WATER_RAW,
+):
+    has_cap = has_real(cap_raw)
+    has_water = has_real(water_pct)
+    if not (has_cap or has_water):
+        return None
+
+    fig, ax1 = plt.subplots(figsize=(11, 4.5))
+    ax2 = ax1.twinx()
+
+    if has_cap:
+        ax1.plot(t_s, cap_raw, label="cap_raw", color="tab:blue", linewidth=1.2)
+    if has_water:
+        ax2.plot(
+            t_s,
+            water_pct,
+            label="water_pct (recalc)",
+            color="tab:green",
+            linewidth=1.2,
+        )
+
+    ax1.set_title(title)
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Capacitance Raw")
+    ax2.set_ylabel("Water %")
+    ax2.set_ylim(0, 100)
+    ax1.grid(True, alpha=0.3)
+
+    lines = []
+    labels = []
+    for ax in (ax1, ax2):
+        line, label = ax.get_legend_handles_labels()
+        lines.extend(line)
+        labels.extend(label)
+    if lines:
+        ax1.legend(lines, labels, loc="best")
+
+    if not math.isnan(cap_air_raw):
+        ax1.text(
+            0.01,
+            0.98,
+            f"air_raw(max)={cap_air_raw:.2f}, water_raw={cap_water_raw:.2f}",
+            transform=ax1.transAxes,
+            va="top",
+            ha="left",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.6),
+        )
+
+    fig.tight_layout()
+    out_path = out_dir / f"{name}.png"
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    return out_path
+
+
 def plot_file(log_path: Path, out_dir: Path):
     rows, t_s = read_log(log_path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stem = log_path.stem
     results = []
+    cap_raw_values = series(rows, "cap_raw")
+    cap_air_raw = cap_air_raw_from_rows(rows)
+    cap_water_pct_values = cap_water_pct_series(rows, cap_air_raw)
 
     results.append(
         save_plot(
@@ -184,6 +275,17 @@ def plot_file(log_path: Path, out_dir: Path):
             "Flow + Valve",
         )
     )
+    results.append(
+        save_cap_plot(
+            out_dir,
+            f"{stem}_cap_water",
+            t_s,
+            cap_raw_values,
+            cap_water_pct_values,
+            "Capacitance Raw + Water % (recalculated)",
+            cap_air_raw=cap_air_raw,
+        )
+    )
 
     return [p for p in results if p is not None]
 
@@ -247,6 +349,9 @@ def main():
         rows, t_s = read_logs(log_paths)
         stem = "combined_logs"
         results = []
+        cap_raw_values = series(rows, "cap_raw")
+        cap_air_raw = cap_air_raw_from_rows(rows)
+        cap_water_pct_values = cap_water_pct_series(rows, cap_air_raw)
         results.append(
             save_plot(
                 out_dir,
@@ -336,6 +441,17 @@ def main():
                     "valve": series(rows, "valve"),
                 },
                 "Flow + Valve (combined logs)",
+            )
+        )
+        results.append(
+            save_cap_plot(
+                out_dir,
+                f"{stem}_cap_water",
+                t_s,
+                cap_raw_values,
+                cap_water_pct_values,
+                "Capacitance Raw + Water % (combined, recalculated)",
+                cap_air_raw=cap_air_raw,
             )
         )
         files = [p for p in results if p is not None]

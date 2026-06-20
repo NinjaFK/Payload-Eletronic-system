@@ -39,7 +39,7 @@ const uint8_t LORA_SYNC_WORD = 0x12;
 #define FLOW_SENSOR_PIN 7
 #define VALVE_ACTIVE_HIGH true
 const bool USE_SENSOR_POWER_SWITCH = false; // debug: bypass rail toggle
-const bool ENABLE_FLOW_SENSOR = false;  // set true when flow sensor is wired
+const bool ENABLE_FLOW_SENSOR = true;   // set true when flow sensor is wired
 const bool ENABLE_VALVE_CONTROL = true; // set true when valve driver is wired
 
 // IMU I2C addresses
@@ -53,14 +53,14 @@ const unsigned long FLOW_UPDATE_MS = 100;
 const unsigned long LIVE_TIME_REPORT_MS = 500;
 const unsigned long RF_TIME_REPORT_MS = 500;
 const unsigned long LOG_FILE_DURATION_MS = 20000;   // rotate file every 20 s
-const unsigned long MAX_LOG_DURATION_MS = 14000000; // auto-stop after 4 hours
+const unsigned long MAX_LOG_DURATION_MS = 32400000; // auto-stop after 9 hours
 const bool AUTO_START_ON_BOOT = false;              // set true for bench tests
 const bool TEST_ADXL_ONLY = false; // true = init/log ADXL only, skip others
 const bool ENABLE_LIVE_TIME_REPORT = true;
 const bool ENABLE_RF_TIME_REPORT = true;
 
 // Valve
-const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = true;
+const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = false; // TURN TO TRUE FOR FLIGHT
 const float GRAVITY_MS2 = 9.80665f;
 const bool FORCE_LAUNCH_DETECTED_FOR_TEST = false;
 const bool OPEN_VALVE_ON_ACCEL_FOR_TEST = false;
@@ -88,7 +88,7 @@ const bool ENABLE_CAP_STARTUP_TARE = true;
 const bool CAP_TARE_ALIGN_TO_AIR = true;
 const float CAP_TARE_OFFSET_APPLY_THRESHOLD_RAW = 20.0f;
 const float CAP_TARE_MAX_ABS_OFFSET_RAW = 300.0f;
-const bool ENABLE_CAP_ESTIMATED_FLOW = true;
+const bool ENABLE_CAP_ESTIMATED_FLOW = false;
 // Fluid volume represented by the capacitive sensing zone (liters).
 const float CAP_SENSOR_VOLUME_L = 0.010f;
 // Use absolute fill change so mixed slug/bubble flow still reports activity.
@@ -233,7 +233,7 @@ bool createNextLogFile() {
           "imu2_ax_ms2,imu2_ay_ms2,imu2_az_ms2,imu2_gx_rads,imu2_gy_rads,"
           "imu2_gz_rads,imu2_accel_norm_g,"
           "temp_c,press_hpa,alt_m,accel_mag_ms2,flow_hz,flow_lpm,"
-          "cap_raw,water_pct,valve,sensor_status");
+          "cap_raw,cap_raw_adjusted,water_pct,valve,sensor_status");
       logFile.flush();
       Serial.print("Opened ");
       Serial.println(filename);
@@ -1376,6 +1376,7 @@ void collectAndLogRow(unsigned long nowMs) {
   float imu2AccelNormG = NAN;
   float tempC = NAN, pressHpa = NAN, altM = NAN, accelMagMs2 = NAN;
   float capRaw = NAN;
+  float capRawAdjusted = NAN;
   float waterPct = NAN;
   uint32_t sensorStatus = 0;
 
@@ -1456,7 +1457,7 @@ void collectAndLogRow(unsigned long nowMs) {
   // Behavior: read capacitive water channel and estimate linear water percent.
   if (capOk) {
     capRaw = (float)cap.filteredData(MPR121_WATER_ELECTRODE);
-    float capRawAdjusted = capRaw + capRawAlignOffset;
+    capRawAdjusted = capRaw + capRawAlignOffset;
     if (!isfinite(filteredCapRaw)) {
       filteredCapRaw = capRawAdjusted;
     } else {
@@ -1537,13 +1538,14 @@ void collectAndLogRow(unsigned long nowMs) {
   // Behavior: append one complete, fixed-column CSV row.
   logFile.printf(
       "%s,%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,"
-      "%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%"
-      "lu\n",
+      "%.4f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.2f,"
+      "%u,%lu\n",
       wallClockText, nowMs, adxlX, adxlY, adxlZ, imu1AxMs2, imu1AyMs2,
       imu1AzMs2, imu1GxRadS, imu1GyRadS, imu1GzRadS, imu1AccelNormG, imu2AxMs2,
       imu2AyMs2, imu2AzMs2, imu2GxRadS, imu2GyRadS, imu2GzRadS, imu2AccelNormG,
-      tempC, pressHpa, altM, accelMagMs2, flowHz, flowLpm, capRaw, waterPct,
-      valveOpen ? 1u : 0u, (unsigned long)sensorStatus);
+      tempC, pressHpa, altM, accelMagMs2, flowHz, flowLpm, capRaw,
+      capRawAdjusted, waterPct, valveOpen ? 1u : 0u,
+      (unsigned long)sensorStatus);
 }
 
 /**
