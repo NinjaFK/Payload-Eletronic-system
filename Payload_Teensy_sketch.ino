@@ -60,7 +60,7 @@ const bool ENABLE_LIVE_TIME_REPORT = true;
 const bool ENABLE_RF_TIME_REPORT = true;
 
 // Valve
-const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = false; // TURN TO TRUE FOR FLIGHT
+const bool ENABLE_AUTO_VALVE_FLIGHT_LOGIC = true; // TURN TO TRUE FOR FLIGHT
 const float GRAVITY_MS2 = 9.80665f;
 const bool FORCE_LAUNCH_DETECTED_FOR_TEST = false;
 const bool OPEN_VALVE_ON_ACCEL_FOR_TEST = false;
