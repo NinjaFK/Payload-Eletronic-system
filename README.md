@@ -1,4 +1,4 @@
-# UNLV IREC Payload Electronics and Software
+# UNLV 2026 IREC Payload Electronics and Software
 
 ### Overview
 This repository contains the firmware, wiring references, and documentation for the **University of Nevada, Las Vegas (UNLV)** CubeSat‑class payload being flown in the **Intercollegiate Rocket Engineering Competition (IREC)**.  
